@@ -1,0 +1,6 @@
+{
+  "name": "3DDD.STUDIO",
+  "description": "Progressive Web App for designing custom streetwear garments in real-time 3D.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

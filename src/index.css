@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-pixel: "Silkscreen", "Geist Mono", monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-black font-sans antialiased overflow-hidden selection:bg-black selection:text-white;
+  }
+}
+
+/* Custom scrollbar for minimal look */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: white;
+}
+::-webkit-scrollbar-thumb {
+  background: #ccc;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #000;
+}
