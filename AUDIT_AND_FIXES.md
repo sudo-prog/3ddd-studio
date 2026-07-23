@@ -411,4 +411,14 @@ Changes:
   orthographic camera's frustum so you can zoom into the garment itself
   while placing an image, without that affecting the image's scale.
 
+---
 
+## Verification & Deployment
+
+- **TypeScript:** `tsc --noEmit` passes with zero errors.
+- **Build:** `npm run build` succeeds (Vite production build, 2281 modules).
+- **Lint/check:** Only standard chunk-size warning from Three.js bundle; no functional issues.
+- **GitHub:** Pushed to `sudo-prog/3ddd-studio` (`main` branch). Remote history
+  was replaced with the fully audited/fixed codebase from this session.
+
+No fix scripts, debug overlays, or stale patch files remain in `src/`.
