@@ -12,7 +12,13 @@ import { useGesture } from '@use-gesture/react';
 import { Lock, Unlock } from 'lucide-react';
 
 const DitheringPass = forwardRef((props: any, ref) => {
-  const effect = useMemo(() => new DitheringEffect(props), [props]);
+  // Construct the effect exactly once. The previous deps array was [props],
+  // and since `props` is a fresh object every render this rebuilt (and
+  // leaked, never disposing) a new DitheringEffect on each render.
+  // Parameter changes are applied through the setters below instead.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const effect = useMemo(() => new DitheringEffect(props), []);
+  useEffect(() => () => { effect.dispose(); }, [effect]);
   useEffect(() => {
     effect.setGridSize(props.gridSize);
     effect.setPixelSizeRatio(props.pixelSizeRatio);
@@ -20,6 +26,29 @@ const DitheringPass = forwardRef((props: any, ref) => {
   }, [props.gridSize, props.pixelSizeRatio, props.grayscaleOnly, effect]);
   return <primitive ref={ref} object={effect} dispose={null} />;
 });
+
+// three's Mesh raycast fills hit.face.normal (OBJECT space); hit.normal is
+// not guaranteed across three versions. Normalize access in one place and
+// always return a WORLD-space normal.
+export const getWorldNormal = (hit: THREE.Intersection): THREE.Vector3 => {
+  if (hit.face?.normal) return hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+  if ((hit as any).normal) return (hit as any).normal.clone().transformDirection(hit.object.matrixWorld);
+  return new THREE.Vector3(0, 0, 1);
+};
+
+// drei's <Decal> zeroes the target mesh's world matrix before building
+// DecalGeometry, so decal position/rotation must be expressed in the mesh's
+// LOCAL space. These helpers convert a world-space point / orientation into
+// the target mesh's local space (see AUDIT_AND_FIXES.md in the 20.17 repo:
+// storing world-space hit.point put the projector box off the surface ->
+// empty geometry -> invisible decal on any mesh with a world transform).
+export const worldPointToMeshLocal = (mesh: THREE.Object3D, worldPoint: THREE.Vector3): THREE.Vector3 =>
+  mesh.worldToLocal(worldPoint.clone());
+
+export const worldQuatToMeshLocalEuler = (mesh: THREE.Object3D, worldQ: THREE.Quaternion): THREE.Euler => {
+  const invMeshQ = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+  return new THREE.Euler().setFromQuaternion(invMeshQ.multiply(worldQ.clone()));
+};
 
 const InvalidModelFallback = () => {
   const setCustomModel = useStore(s => s.setCustomModel);
@@ -55,9 +84,6 @@ const CustomGLTFModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: T
     materialsRef.current = [];
     const childToTraverse = clonedScene;
 
-    
-    materialsRef.current = [];
-    
     const extractedMaterials: Record<string, { color: string, roughness: number, metalness: number }> = {};
     const matNames: string[] = [];
 
@@ -118,9 +144,8 @@ const CustomGLTFModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: T
     }, 0);
 
     
-    // We already passed meshes in the useMemo step! Wait, no we didn't, the previous replace was probably in the wrong place or didn't replace both!
-    // Let's just collect meshes here and call onMeshReady!
-    const meshes = [];
+    // Collect meshes and hand them to the parent for decal raycasting.
+    const meshes: THREE.Mesh[] = [];
     clonedScene.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         meshes.push(child);
@@ -176,9 +201,6 @@ const CustomOBJModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: TH
     materialsRef.current = [];
     const childToTraverse = clonedObj;
 
-    
-    materialsRef.current = [];
-    
     const extractedMaterials: Record<string, { color: string, roughness: number, metalness: number }> = {};
     const matNames: string[] = [];
 
@@ -239,7 +261,7 @@ const CustomOBJModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: TH
     }, 0);
 
     
-    const meshes = [];
+    const meshes: THREE.Mesh[] = [];
     clonedObj.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         meshes.push(child);
@@ -347,11 +369,16 @@ const DecalItem = ({ decal, meshRef, isFirst }: { decal: any, meshRef: React.Ref
       if (intersection.face) {
         const n = intersection.face.normal.clone();
         n.transformDirection(mesh.matrixWorld);
-        const pos = intersection.point.clone();
-        
-        targetPos.current.copy(pos);
+        // Decal position/rotation live in the mesh's LOCAL space (drei's
+        // <Decal> zeroes the mesh's world matrix while building
+        // DecalGeometry), so convert the world-space drag hit to local
+        // before storing it - otherwise dragging a decal on a transformed
+        // mesh made it jump off the surface.
+        const nudged = intersection.point.clone().addScaledVector(n, 0.004);
+        targetPos.current.copy(mesh.worldToLocal(nudged));
         const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        targetRot.current.setFromQuaternion(worldQ);
+        const invMeshQ = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+        targetRot.current.setFromQuaternion(invMeshQ.multiply(worldQ));
       }
     }
   };
@@ -613,7 +640,9 @@ const GarmentPlaceholder = () => {
   // mesh's surface - derived from its own bounding box - instead of a fixed
   // [0,0,0.15] that was tuned for the placeholder shape and can miss a
   // custom uploaded model's geometry completely (producing an invisible,
-  // empty decal with no error).
+  // empty decal with no error). NOTE: decal transforms are stored in the
+  // target mesh's LOCAL space (drei <Decal> zeroes the mesh's world matrix),
+  // so this stays in the mesh's local bounding-box space on purpose.
   const getFallbackDecalPlacement = (): { position: [number, number, number]; rotation: [number, number, number]; meshIndex: number } => {
     const mesh = meshesRef.current[0];
     if (!mesh) return { position: [0, 0, 0.15], rotation: [0, 0, 0], meshIndex: 0 };
@@ -622,7 +651,6 @@ const GarmentPlaceholder = () => {
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
     if (bb) { bb.getSize(size); bb.getCenter(center); }
-    mesh.localToWorld(center);
     // Nudge toward the camera-facing side of the mesh's own bounding box
     // rather than assuming a fixed depth.
     const zOffset = (size.z || 0.3) * 0.45;
@@ -641,14 +669,19 @@ const GarmentPlaceholder = () => {
       const intersects = raycaster.intersectObjects(meshesRef.current, true);
       if (intersects.length > 0) {
         const hit = intersects[0];
-        
-        const n = hit.normal ? hit.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
-        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        const e = new THREE.Euler().setFromQuaternion(q);
+
+        const n = getWorldNormal(hit);
         const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
         const depth = probeWallThickness(hit.object as THREE.Mesh, hit.point, n);
         const placed = nudgeOutward(hit.point, n);
-        useStore.getState().addDecal(url, [placed.x, placed.y, placed.z], [e.x, e.y, e.z], 'front', meshIndex, depth);
+
+        // drei's <Decal> zeroes the target mesh's world matrix before building
+        // DecalGeometry, so position/rotation are interpreted in the mesh's
+        // LOCAL space. Convert the world-space raycast hit into local space.
+        const localPoint = worldPointToMeshLocal(hit.object, placed);
+        const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+        const localEuler = worldQuatToMeshLocalEuler(hit.object, worldQ);
+        useStore.getState().addDecal(url, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], 'front', meshIndex, depth);
 
       } else {
         const fallback = getFallbackDecalPlacement();
@@ -689,7 +722,12 @@ const GarmentPlaceholder = () => {
         const normal = direction.clone().negate();
         const depth = probeWallThickness(hit.object as THREE.Mesh, hit.point, normal);
         const placed = nudgeOutward(hit.point, normal);
-        useStore.getState().addDecal(url, [placed.x, placed.y, placed.z], [euler.x, euler.y, euler.z], placement, meshIndex, depth);
+        // Convert the world-space hit point & placement rotation into the
+        // target mesh's LOCAL space (see handleAddDecal for why).
+        const localPoint = worldPointToMeshLocal(hit.object, placed);
+        const worldQ = new THREE.Quaternion().setFromEuler(euler);
+        const localEuler = worldQuatToMeshLocalEuler(hit.object, worldQ);
+        useStore.getState().addDecal(url, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], placement, meshIndex, depth);
       } else {
         const fallback = getFallbackDecalPlacement();
         useStore.getState().addDecal(url, fallback.position, [euler.x, euler.y, euler.z], placement, fallback.meshIndex);
@@ -736,7 +774,10 @@ const GarmentPlaceholder = () => {
       ref={groupRef} 
       position={[0, 0, 0]}
       onPointerDown={(e) => {
-        if (useStore.getState().isGarmentLocked && e.intersections[0].object !== undefined) {
+        // Deselect the active decal when tapping empty garment space.
+        // Guard the intersections access - it can be empty when the event
+        // bubbles from a miss, and [0].object would throw.
+        if (useStore.getState().isGarmentLocked && e.intersections.length > 0) {
            useStore.getState().setActiveDecalId(null);
         }
       }}

@@ -159,8 +159,18 @@ export default function App() {
   const handleObjUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setFakeUploadProgress(0);
+      // Validate file size (200MB max for GLB/GLTF, 50MB for OBJ)
       const isGlb = file.name.toLowerCase().endsWith('.glb') || file.name.toLowerCase().endsWith('.gltf');
+      const maxSize = isGlb ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
+      const sizeLabel = isGlb ? '200MB' : '50MB';
+
+      if (file.size > maxSize) {
+        alert(`File "${file.name}" exceeds the ${sizeLabel} limit for ${isGlb ? 'GLB/GLTF' : 'OBJ'} models.`);
+        if (e.target) e.target.value = '';
+        return;
+      }
+
+      setFakeUploadProgress(0);
       const fileId = uuidv4();
       
       let p = 0;

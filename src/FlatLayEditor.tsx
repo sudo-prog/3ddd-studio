@@ -1,8 +1,9 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
+import { OrthographicCamera } from '@react-three/drei';
 import * as THREE from 'three';
 import { X, Upload, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
-import { GarmentMeshes } from './Viewer3D';
+import { GarmentMeshes, getWorldNormal, worldPointToMeshLocal, worldQuatToMeshLocalEuler } from './Viewer3D';
 import { useStore } from './store';
 import { ImageEditor } from './ImageEditor';
 
@@ -59,7 +60,12 @@ const SceneBridge = ({
 
   return (
     <>
-      <orthographicCamera ref={cameraRef} />
+      {/* makeDefault so the on-screen render uses the SAME camera the
+          raycast-on-save math uses - otherwise the preview showed the
+          default canvas camera (always the front) while the save raycast
+          fired from the placement camera. `manual` stops drei from
+          overwriting the frustum we set above. */}
+      <OrthographicCamera ref={cameraRef} makeDefault manual />
       <ambientLight intensity={1.1} />
       <directionalLight position={[2, 3, 4]} intensity={1.2} />
       <directionalLight position={[-2, -1, -4]} intensity={0.4} />
@@ -260,14 +266,13 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
 
     if (intersects.length > 0) {
       const hit = intersects[0];
-      const n = hit.normal ? hit.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+      const n = getWorldNormal(hit);
       const alignQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
       // Fold the on-screen rotation (from the two-finger twist gesture)
       // into the decal's final orientation, rolled around its own
       // projection axis before being aligned to the surface normal.
       const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(-box.rotation));
       const finalQuat = alignQuat.clone().multiply(rollQuat);
-      const euler = new THREE.Euler().setFromQuaternion(finalQuat);
       const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
 
       const probeOrigin = hit.point.clone().addScaledVector(n, 0.5);
@@ -283,8 +288,13 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
 
       const placed = hit.point.clone().addScaledVector(n, 0.004);
 
+      // drei's <Decal> interprets position/rotation in the target mesh's
+      // LOCAL space - convert before storing (see Viewer3D helpers).
+      const localPoint = worldPointToMeshLocal(hit.object, placed);
+      const localEuler = worldQuatToMeshLocalEuler(hit.object, finalQuat);
+
       const store = useStore.getState();
-      store.addDecal(pendingImage, [placed.x, placed.y, placed.z], [euler.x, euler.y, euler.z], placement, meshIndex, depth);
+      store.addDecal(pendingImage, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], placement, meshIndex, depth);
       const newId = useStore.getState().activeDecalId;
       if (newId) {
         store.updateDecal(newId, { scale: [scaleX, scaleY, 1] });
