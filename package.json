@@ -13,6 +13,7 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "@react-three/postprocessing": "^3.0.4",
+    "postprocessing": "^6.39.3",
     "@tailwindcss/vite": "^4.1.14",
     "@use-gesture/react": "^10.3.1",
     "@vitejs/plugin-react": "^5.0.4",
