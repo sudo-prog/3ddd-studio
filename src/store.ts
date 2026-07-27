@@ -116,7 +116,28 @@ export interface LibraryItem {
   baseGarment: GarmentType;
 }
 
-const initialLibrary: LibraryItem[] = [];
+const initialLibrary: LibraryItem[] = [
+  {
+    id: 'seed-t-shirt-hoodie',
+    name: 'T-SHIRT HOODIE',
+    color: '#ffffff',
+    roughness: 0.8,
+    metalness: 0.1,
+    decals: [],
+    customModel: { url: '/models/t_shirt_hoodie.glb', type: 'glb' },
+    baseGarment: 'tshirt',
+  },
+  {
+    id: 'seed-classic-hoodie',
+    name: 'BLACK FLAME HOODIE',
+    color: '#ffffff',
+    roughness: 0.8,
+    metalness: 0.1,
+    decals: [],
+    customModel: { url: '/models/classic_black_flame_hoodie.glb', type: 'glb' },
+    baseGarment: 'hoodie',
+  },
+];
 
 interface AppState {
   library: LibraryItem[];

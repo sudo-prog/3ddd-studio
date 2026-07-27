@@ -369,19 +369,18 @@ export default function App() {
                 ))}
               </div>
               <div className="p-4 border-t border-black mt-auto shrink-0">
-                <input 
-                  type="file" 
-                  accept=".obj,.glb,.gltf"
-                  ref={objInputRef}
-                  className="hidden"
-                  onChange={handleObjUpload}
-                />
-                <button 
-                  onClick={() => objInputRef.current?.click()}
-                  className="block w-full p-2 text-center border border-black text-[9px] uppercase cursor-pointer hover:bg-black hover:text-white transition-colors"
-                >
-                  UPLOAD_CUSTOM_MODEL
-                </button>
+                <label className="block w-full">
+                  <input 
+                    type="file" 
+                    accept=".obj,.glb,.gltf"
+                    ref={objInputRef}
+                    className="hidden"
+                    onChange={handleObjUpload}
+                  />
+                  <span className="block w-full p-2 text-center border border-black text-[9px] uppercase cursor-pointer hover:bg-black hover:text-white transition-colors">
+                    UPLOAD_CUSTOM_MODEL
+                  </span>
+                </label>
                 <p className="mt-1 text-[8px] text-[#666] leading-tight normal-case">
                   .glb / .gltf / .obj — files are saved to the project repo (public/models/) for permanent storage; local browser storage is used as offline fallback.
                 </p>
