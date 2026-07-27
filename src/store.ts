@@ -116,7 +116,7 @@ export interface LibraryItem {
   baseGarment: GarmentType;
 }
 
-const initialLibrary: LibraryItem[] = [
+const SEED_LIBRARY_ITEMS: LibraryItem[] = [
   {
     id: 'seed-t-shirt-hoodie',
     name: 'T-SHIRT HOODIE',
@@ -199,7 +199,7 @@ interface AppState {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
-  library: initialLibrary,
+  library: SEED_LIBRARY_ITEMS,
   activeId: null,
   
       garment: 'tshirt',
@@ -475,6 +475,13 @@ export const useStore = create<AppState>()(
           }));
           state.customModel = state.customModel?.url.startsWith('blob:') ? null : state.customModel;
           state.decals = state.decals.filter(d => !d.url.startsWith('blob:'));
+          // Always ensure the seeded user garments are present, even if the
+          // persisted library (e.g. from a session where upload failed) is empty
+          // or was saved before the seeds existed. Merge by id, don't duplicate.
+          const seedIds = new Set(state.library.map(i => i.id));
+          for (const seed of SEED_LIBRARY_ITEMS) {
+            if (!seedIds.has(seed.id)) state.library.unshift(seed);
+          }
         }
       }
     }

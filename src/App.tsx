@@ -157,81 +157,84 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objInputRef = useRef<HTMLInputElement>(null);
 
-  const handleObjUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Validate file size (200MB max for GLB/GLTF, 50MB for OBJ)
-      const isGlb = file.name.toLowerCase().endsWith('.glb') || file.name.toLowerCase().endsWith('.gltf');
-      const maxSize = isGlb ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
-      const sizeLabel = isGlb ? '200MB' : '50MB';
+  // Shared model-file handler — used by BOTH the file-input (click) and the
+  // drag-and-drop path, so uploads work even where a native file dialog is
+  // blocked (iframe/webview/mobile).
+  const handleModelFile = (file: File) => {
+    const isGlb = file.name.toLowerCase().endsWith('.glb') || file.name.toLowerCase().endsWith('.gltf');
+    const maxSize = isGlb ? 200 * 1024 * 1024 : 50 * 1024 * 1024;
+    const sizeLabel = isGlb ? '200MB' : '50MB';
 
-      if (file.size > maxSize) {
-        alert(`File "${file.name}" exceeds the ${sizeLabel} limit for ${isGlb ? 'GLB/GLTF' : 'OBJ'} models.`);
-        if (e.target) e.target.value = '';
-        return;
+    if (file.size > maxSize) {
+      alert(`File "${file.name}" exceeds the ${sizeLabel} limit for ${isGlb ? 'GLB/GLTF' : 'OBJ'} models.`);
+      return;
+    }
+
+    setFakeUploadProgress(0);
+    const fileId = uuidv4();
+    const type = isGlb ? 'glb' as const : 'obj' as const;
+    const baseName = file.name.split('.')[0];
+
+    const finishUpload = async () => {
+      setFakeUploadProgress(null);
+
+      // Always keep a local IndexedDB copy — it's the offline fallback and
+      // lets the model re-hydrate on this device even without network.
+      let idbOk = true;
+      try {
+        await idbSet('file_' + fileId, file);
+      } catch (err) {
+        idbOk = false;
+        console.error('Failed to save file to IDB', err);
       }
 
-      setFakeUploadProgress(0);
-      const fileId = uuidv4();
-      const type = isGlb ? 'glb' as const : 'obj' as const;
-      const baseName = file.name.split('.')[0];
-
-      const finishUpload = async () => {
-        setFakeUploadProgress(null);
-
-        // Always keep a local IndexedDB copy — it's the offline fallback and
-        // lets the model re-hydrate on this device even without network.
-        let idbOk = true;
+      // DEFAULT storage path: commit the file to the project repo via the
+      // GitHub Contents API so it persists beyond this browser.
+      if (isGithubStorageConfigured()) {
         try {
-          await idbSet('file_' + fileId, file);
+          const { rawUrl } = await uploadModelToGithub(file);
+          // Use the permanent raw URL as the model URL (survives the
+          // persist middleware, unlike blob: URLs) and keep fileId so the
+          // IDB copy remains available as an offline fallback.
+          useStore.getState().createCustomModelItem(baseName, { url: rawUrl, type, ...(idbOk ? { fileId } : {}) });
+          return;
         } catch (err) {
-          idbOk = false;
-          console.error('Failed to save file to IDB', err);
+          console.error('GitHub upload failed, falling back to local storage', err);
+          alert(`Could not save "${file.name}" to the project repo (${err instanceof Error ? err.message : String(err)}).\nUsing local browser storage instead.`);
         }
+      } else {
+        console.warn('GitHub storage not configured (VITE_GITHUB_TOKEN missing) — using local browser storage only.');
+      }
 
-        // DEFAULT storage path: commit the file to the project repo via the
-        // GitHub Contents API so it persists beyond this browser.
-        if (isGithubStorageConfigured()) {
-          try {
-            const { rawUrl } = await uploadModelToGithub(file);
-            // Use the permanent raw URL as the model URL (survives the
-            // persist middleware, unlike blob: URLs) and keep fileId so the
-            // IDB copy remains available as an offline fallback.
-            useStore.getState().createCustomModelItem(baseName, { url: rawUrl, type, ...(idbOk ? { fileId } : {}) });
-            return;
-          } catch (err) {
-            console.error('GitHub upload failed, falling back to local storage', err);
-            alert(`Could not save "${file.name}" to the project repo (${err instanceof Error ? err.message : String(err)}).\nUsing local browser storage instead.`);
-          }
-        } else {
-          console.warn('GitHub storage not configured (VITE_GITHUB_TOKEN missing) — using local browser storage only.');
-        }
+      // Fallback: local-only (blob URL + IndexedDB / data URL).
+      if (idbOk) {
+        const url = URL.createObjectURL(file);
+        useStore.getState().createCustomModelItem(baseName, { url, type, fileId });
+      } else {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          useStore.getState().createCustomModelItem(baseName, { url: dataUrl, type });
+        };
+        reader.readAsDataURL(file);
+      }
+    };
 
-        // Fallback: local-only (blob URL + IndexedDB / data URL).
-        if (idbOk) {
-          const url = URL.createObjectURL(file);
-          useStore.getState().createCustomModelItem(baseName, { url, type, fileId });
-        } else {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const dataUrl = event.target?.result as string;
-            useStore.getState().createCustomModelItem(baseName, { url: dataUrl, type });
-          };
-          reader.readAsDataURL(file);
-        }
-      };
+    let p = 0;
+    const interval = setInterval(() => {
+      p += 15;
+      if (p >= 100) {
+        clearInterval(interval);
+        finishUpload();
+      } else {
+        setFakeUploadProgress(p);
+      }
+    }, 50);
+  };
 
-      let p = 0;
-      const interval = setInterval(() => {
-        p += 15;
-        if (p >= 100) {
-          clearInterval(interval);
-          finishUpload();
-        } else {
-          setFakeUploadProgress(p);
-        }
-      }, 50);
-    }
+  const handleObjUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleModelFile(file);
     if (e.target) e.target.value = '';
   };
 
@@ -287,6 +290,12 @@ export default function App() {
     if (!isGarmentLocked) return;
 
     const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    // Model files (.glb/.gltf/.obj) upload regardless of garment lock state.
+    if (/\.(glb|gltf|obj)$/i.test(file.name)) {
+      handleModelFile(file);
+      return;
+    }
     if (file && file.type.startsWith('image/')) {
       setFakeUploadProgress(0);
       const reader = new FileReader();
@@ -328,7 +337,7 @@ export default function App() {
         <div className="absolute inset-0 z-[60] flex items-center justify-center pointer-events-none bg-black/40">
           <div className="bg-white border-2 border-black px-6 py-4 text-center max-w-xs">
             {isGarmentLocked ? (
-              <span className="text-[11px] font-bold">DROP TO PLACE IMAGE ON GARMENT</span>
+              <span className="text-[11px] font-bold">DROP .GLB / IMAGE ONTO GARMENT</span>
             ) : (
               <span className="text-[11px] font-bold text-red-600">LOCK THE GARMENT FIRST (padlock button) TO DROP IMAGES ONTO IT</span>
             )}
