@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# squad cleanup backup (do not push)
+BACKUP_3DDD_SQUAD_20260727/
+
+# build output
+.vercel/
+graphify-out/
