@@ -7,6 +7,7 @@ import { useStore, LibraryItem as LibraryItemType } from './store';
 import Viewer3D from './Viewer3D';
 import { ImageEditor } from './ImageEditor';
 import { FlatLayEditor } from './FlatLayEditor';
+import { uploadModelToGithub, isGithubStorageConfigured } from './githubStorage';
 
 const LibraryItem = ({ item, index }: { item: LibraryItemType, index: number }) => {
   const { activeId, setActiveItem, renameLibraryItem, deleteLibraryItem } = useStore();
@@ -156,6 +157,24 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objInputRef = useRef<HTMLInputElement>(null);
 
+  // TEMP-TEST-HOOK (dev only, removed before commit)
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as any).__test3dddUpload = async (url: string, name: string) => {
+        const res = await fetch(url);
+        const buf = await res.arrayBuffer();
+        const file = new File([buf], name, { type: 'model/gltf-binary' });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        const input = objInputRef.current;
+        if (!input) return 'no input';
+        Object.defineProperty(input, 'files', { value: dt.files, configurable: true });
+        handleObjUpload({ target: input } as any);
+        return 'ok size=' + buf.byteLength;
+      };
+    }
+  }, []);
+
   const handleObjUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -172,27 +191,60 @@ export default function App() {
 
       setFakeUploadProgress(0);
       const fileId = uuidv4();
-      
+      const type = isGlb ? 'glb' as const : 'obj' as const;
+      const baseName = file.name.split('.')[0];
+
+      const finishUpload = async () => {
+        setFakeUploadProgress(null);
+
+        // Always keep a local IndexedDB copy — it's the offline fallback and
+        // lets the model re-hydrate on this device even without network.
+        let idbOk = true;
+        try {
+          await idbSet('file_' + fileId, file);
+        } catch (err) {
+          idbOk = false;
+          console.error('Failed to save file to IDB', err);
+        }
+
+        // DEFAULT storage path: commit the file to the project repo via the
+        // GitHub Contents API so it persists beyond this browser.
+        if (isGithubStorageConfigured()) {
+          try {
+            const { rawUrl } = await uploadModelToGithub(file);
+            // Use the permanent raw URL as the model URL (survives the
+            // persist middleware, unlike blob: URLs) and keep fileId so the
+            // IDB copy remains available as an offline fallback.
+            useStore.getState().createCustomModelItem(baseName, { url: rawUrl, type, ...(idbOk ? { fileId } : {}) });
+            return;
+          } catch (err) {
+            console.error('GitHub upload failed, falling back to local storage', err);
+            alert(`Could not save "${file.name}" to the project repo (${err instanceof Error ? err.message : String(err)}).\nUsing local browser storage instead.`);
+          }
+        } else {
+          console.warn('GitHub storage not configured (VITE_GITHUB_TOKEN missing) — using local browser storage only.');
+        }
+
+        // Fallback: local-only (blob URL + IndexedDB / data URL).
+        if (idbOk) {
+          const url = URL.createObjectURL(file);
+          useStore.getState().createCustomModelItem(baseName, { url, type, fileId });
+        } else {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const dataUrl = event.target?.result as string;
+            useStore.getState().createCustomModelItem(baseName, { url: dataUrl, type });
+          };
+          reader.readAsDataURL(file);
+        }
+      };
+
       let p = 0;
       const interval = setInterval(() => {
         p += 15;
         if (p >= 100) {
           clearInterval(interval);
-          setFakeUploadProgress(null);
-          
-          idbSet('file_' + fileId, file).then(() => {
-            const url = URL.createObjectURL(file);
-            useStore.getState().createCustomModelItem(file.name.split('.')[0], { url, type: isGlb ? 'glb' : 'obj', fileId });
-          }).catch(err => {
-            console.error('Failed to save file to IDB', err);
-            // fallback to data url if idb fails
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              const dataUrl = event.target?.result as string;
-              useStore.getState().createCustomModelItem(file.name.split('.')[0], { url: dataUrl, type: isGlb ? 'glb' : 'obj' });
-            };
-            reader.readAsDataURL(file);
-          });
+          finishUpload();
         } else {
           setFakeUploadProgress(p);
         }
@@ -348,6 +400,9 @@ export default function App() {
                 >
                   UPLOAD_CUSTOM_MODEL
                 </button>
+                <p className="mt-1 text-[8px] text-[#666] leading-tight normal-case">
+                  .glb / .gltf / .obj — files are saved to the project repo (public/models/) for permanent storage; local browser storage is used as offline fallback.
+                </p>
               </div>
             </div>
           )}

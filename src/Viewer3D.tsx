@@ -6,6 +6,8 @@ import { Html, OrbitControls, Environment, ContactShadows, Decal, useTexture, Ro
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useStore } from './store';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useGesture } from '@use-gesture/react';
@@ -50,17 +52,60 @@ export const worldQuatToMeshLocalEuler = (mesh: THREE.Object3D, worldQ: THREE.Qu
   return new THREE.Euler().setFromQuaternion(invMeshQ.multiply(worldQ.clone()));
 };
 
-const InvalidModelFallback = () => {
+// --- GLTF decoder wiring -------------------------------------------------
+// Most real-world .glb exports (Sketchfab, Blender with compression, CLO3D,
+// gltf-transform pipelines) are Draco- and/or meshopt-compressed. Without a
+// decoder attached, GLTFLoader.parse throws ("No DRACOLoader instance
+// provided") and the ErrorBoundary used to silently discard the model —
+// which looked exactly like "upload failed". Wire both decoders once at
+// module scope and pass them into every custom-model useGLTF call.
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+dracoLoader.setDecoderConfig({ type: 'js' });
+
+const extendGltfLoader = (loader: any) => {
+  loader.setDRACOLoader(dracoLoader as any);
+  loader.setMeshoptDecoder(MeshoptDecoder as any);
+};
+
+const InvalidModelFallback = ({ error }: { error?: Error | null }) => {
   const setCustomModel = useStore(s => s.setCustomModel);
-  useEffect(() => {
-    setCustomModel(null);
-  }, [setCustomModel]);
-  return null;
+  const message = error?.message || 'The model file could not be parsed.';
+  // Visible on-screen error instead of the old silent setCustomModel(null)
+  // (which snapped back to the default t-shirt with zero feedback).
+  return (
+    <Html center zIndexRange={[100, 90]}>
+      <div style={{
+        background: '#fff', border: '2px solid #d00', color: '#111',
+        padding: '12px 16px', width: 320, fontFamily: 'monospace',
+        fontSize: 11, lineHeight: 1.5, boxShadow: '4px 4px 0 rgba(0,0,0,0.2)'
+      }}>
+        <div style={{ fontWeight: 700, color: '#d00', textTransform: 'uppercase', marginBottom: 6 }}>
+          Model failed to load
+        </div>
+        <div style={{ wordBreak: 'break-word', maxHeight: 120, overflow: 'auto', marginBottom: 10 }}>
+          {message}
+        </div>
+        <button
+          onClick={() => setCustomModel(null)}
+          style={{
+            border: '1px solid #111', background: '#111', color: '#fff',
+            padding: '6px 10px', fontSize: 10, textTransform: 'uppercase', cursor: 'pointer'
+          }}
+        >
+          Remove model / back to default
+        </button>
+      </div>
+    </Html>
+  );
 };
 
 const CustomGLTFModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: THREE.Mesh[]) => void }) => {
   const { color, roughness, metalness, materialsConfig, initMaterialsConfig, setAvailableMaterials } = useStore();
-  const { scene } = useGLTF(url);
+  // useDraco/useMeshopt are disabled here so drei doesn't attach its own
+  // (differently-configured) decoders after ours; extendGltfLoader wires
+  // Draco (gstatic 1.5.7, js decoder) + meshopt in one place.
+  const { scene } = useGLTF(url, false, false, extendGltfLoader);
   const clonedScene = useMemo(() => scene.clone(), [scene]);
   const materialsRef = useRef<THREE.MeshStandardMaterial[]>([]);
 
@@ -513,7 +558,7 @@ export const GarmentMeshes = ({ onMeshReady }: { onMeshReady: (m: THREE.Mesh[]) 
 
   if (customModel) {
     return (
-      <ErrorBoundary fallback={<InvalidModelFallback />}>
+      <ErrorBoundary fallback={(error) => <InvalidModelFallback error={error} />}>
         <Suspense fallback={null}>
           {customModel.url ? (
             customModel.type === 'obj' ? (
