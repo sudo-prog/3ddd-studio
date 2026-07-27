@@ -906,9 +906,16 @@ export default function Viewer3D() {
         <GarmentPlaceholder />
         
         <ContactShadows position={[0, -0.75, 0]} opacity={0.6} scale={8} blur={1.8} far={1} />
-        <Suspense fallback={null}>
-          <Environment preset="studio" />
-        </Suspense>
+        {/* Environment fetches a remote HDR; if that fetch fails it THROWS
+            (Suspense only handles suspension, not errors). Without this
+            ErrorBoundary the throw would unmount the entire Canvas subtree,
+            blanking the viewport. With it, a failed/blocked HDR just means
+            no env reflections — the garment still renders. */}
+        <ErrorBoundary fallback={null}>
+          <Suspense fallback={null}>
+            <Environment preset="studio" />
+          </Suspense>
+        </ErrorBoundary>
         
         <OrbitControls 
           enabled={!isGarmentLocked}
