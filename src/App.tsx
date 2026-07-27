@@ -157,24 +157,6 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const objInputRef = useRef<HTMLInputElement>(null);
 
-  // TEMP-TEST-HOOK (dev only, removed before commit)
-  useEffect(() => {
-    if (import.meta.env.DEV) {
-      (window as any).__test3dddUpload = async (url: string, name: string) => {
-        const res = await fetch(url);
-        const buf = await res.arrayBuffer();
-        const file = new File([buf], name, { type: 'model/gltf-binary' });
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        const input = objInputRef.current;
-        if (!input) return 'no input';
-        Object.defineProperty(input, 'files', { value: dt.files, configurable: true });
-        handleObjUpload({ target: input } as any);
-        return 'ok size=' + buf.byteLength;
-      };
-    }
-  }, []);
-
   const handleObjUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
