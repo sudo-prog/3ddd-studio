@@ -416,9 +416,54 @@ Changes:
 ## Verification & Deployment
 
 - **TypeScript:** `tsc --noEmit` passes with zero errors.
-- **Build:** `npm run build` succeeds (Vite production build, 2281 modules).
+- **Build:** `npm run build` succeeds (Vite production build, 2284 modules).
 - **Lint/check:** Only standard chunk-size warning from Three.js bundle; no functional issues.
 - **GitHub:** Pushed to `sudo-prog/3ddd-studio` (`main` branch). Remote history
   was replaced with the fully audited/fixed codebase from this session.
 
 No fix scripts, debug overlays, or stale patch files remain in `src/`.
+
+---
+
+## Round 5 — "Still not working": blank 3D viewport (2026-07-28)
+
+After Rounds 1-4 the build passed and the audit fixes were real, but the live app
+(`https://3ddd-studio.vercel.app`) still showed an **empty viewport** — UI shell
+loaded, but no garment rendered (measured 0.2% non-white pixels in the canvas
+region). Root cause chain:
+
+1. **`<Environment preset="studio" />` (Viewer3D.tsx, inside `<Canvas>`) fetches a
+   remote HDR from a CDN.** With no `<Suspense>` wrapper around it, a slow/blocked
+   HDR fetch suspended the whole Canvas subtree → blank canvas. FIX: wrapped in
+   `<Suspense fallback={null}>`.
+2. **Suspense only catches suspension, NOT throws.** If the HDR fetch *failed*
+   (network block / CDN error), `Environment` threw, and the unhandled throw
+   unmounted the entire Canvas subtree → still blank. FIX: also wrapped in the
+   existing `<ErrorBoundary fallback={null}>` (Viewer3D.tsx already imported
+   `ErrorBoundary`). A failed/blocked HDR now degrades to "no env reflections"
+   instead of blanking the garment. `GarmentPlaceholder`/`GarmentMeshes` are
+   siblings of the Environment block, so they render independently (lit by the
+   existing `ambientLight` + `directionalLight`).
+3. **Decals rendered off-screen on custom/transformed meshes** (Viewer3D.tsx
+   `DecalItem`): the decal was returned in a plain identity `<group>`, so on any
+   auto-scaled/recentered GLB/OBJ (or the rotated placeholder arms) the decal
+   landed in the wrong place / off-screen. FIX: wrapped in
+   `createPortal(group, mesh)` so it parents into the actual target mesh.
+4. **Drag-drop `.glb/.obj` upload was silently ignored** unless the garment was
+   pre-locked (App.tsx `handleDrop`): the `if (!isGarmentLocked) return;` early
+   exit ran *before* the model-extension check. FIX: moved the
+   `.glb/.gltf/.obj` check (and `dataTransfer.files` read) ahead of the lock gate.
+
+**Verification (real, measured):** after the fixes, a fresh load renders the
+garment — viewport pixel analysis shows **27.6% non-white** with a clear ~164px
+centered silhouette (vs 0.2% blank before). Canvas is healthy (1280×577, WebGL
+active). `tsc --noEmit` → exit 0; `npm run build` → exit 0 (2284 modules).
+Committed: `000a234` (decal portal + drop reorder + Environment Suspense),
+`f4126be` (Environment ErrorBoundary). Pushed to `main`; auto-deployed to
+Vercel `3ddd-studio` (production build `3ddd-studio-mkvyh1lwn`, Ready).
+
+**Residual known issue (not blocking):** a returning visitor whose persisted
+IndexedDB state holds a dead `blob:`/`customModel` URL can get stuck on
+`LOADING_MODEL... 0%` with no timeout/fallback. Fresh visitors and valid seeded
+models load fine. Tracked for a follow-up (add a load timeout + fallback to the
+placeholder).
