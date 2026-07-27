@@ -6,6 +6,12 @@
 - GitHub: `sudo-prog/3ddd-studio` (branch `main`)
 - Prod: https://3ddd-studio.vercel.app (Vercel auto-deploys on push to main)
 - Stack: Vite 6 + React 19 + react-three-fiber 9 / three 0.185 + tailwind v4
+- **STATUS (2026-07-28): VERIFIED WORKING.** Blank-viewport bug fixed (Round 5):
+  `<Environment preset="studio">` wrapped in `<Suspense>` + `<ErrorBoundary>`
+  (failed/blocked HDR no longer blanks the canvas); decals parented via
+  `createPortal` into target mesh; drag-drop `.glb/.obj` upload unblocked.
+  Live render verified by viewport pixel analysis (27.6% non-white, centered
+  garment silhouette). See AUDIT_AND_FIXES.md "Round 5".
 
 ## Agent workflow (how to work on this repo)
 - VS Code headless sub-agent host (launched by Hermes, not in-editor extensions):
