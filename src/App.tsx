@@ -284,18 +284,24 @@ export default function App() {
     dragCounter.current = 0;
     setIsDraggingFileOverCanvas(false);
 
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    // Model files (.glb/.gltf/.obj) upload regardless of garment lock state,
+    // so this check MUST run before the lock gate below. Previously the
+    // `!isGarmentLocked` early-return came first, which silently swallowed
+    // .glb drops in the default (unlocked/rotate) mode — the advertised
+    // "drag-drop a .glb" flow did nothing unless the user happened to have
+    // locked the garment first.
+    if (/\.(glb|gltf|obj)$/i.test(file.name)) {
+      handleModelFile(file);
+      return;
+    }
+
     // Dropping an image onto the garment only places it when the garment is
     // locked (i.e. in decal-editing mode). In unlocked/rotate mode the drop
     // is ignored so it can't be confused with the free-rotate gesture.
     if (!isGarmentLocked) return;
 
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    // Model files (.glb/.gltf/.obj) upload regardless of garment lock state.
-    if (/\.(glb|gltf|obj)$/i.test(file.name)) {
-      handleModelFile(file);
-      return;
-    }
     if (file && file.type.startsWith('image/')) {
       setFakeUploadProgress(0);
       const reader = new FileReader();

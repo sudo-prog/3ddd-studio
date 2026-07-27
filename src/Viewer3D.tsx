@@ -452,7 +452,18 @@ const DecalItem = ({ decal, meshRef, isFirst }: { decal: any, meshRef: React.Ref
 
   if (!mesh) return null;
 
-  return (
+  // The decal's geometry is built in the TARGET MESH'S LOCAL SPACE (drei's
+  // <Decal> zeroes the mesh's world matrix while running DecalGeometry), so
+  // the decal mesh itself must inherit the target mesh's world transform to
+  // render on its surface. Rendering it under a plain identity <group> (the
+  // previous code) only worked when the target mesh's matrixWorld happened
+  // to be identity - i.e. the placeholder torso at the origin. Every custom
+  // GLB/OBJ is auto-scaled (3/maxDim) and recentered, and the placeholder
+  // arms are translated/rotated, so decals on those rendered detached from
+  // the surface (wrong position AND wrong size) or fully off-screen.
+  // createPortal parents the decal into the actual mesh, restoring the
+  // canonical drei usage.
+  return createPortal(
     <group>
       <Decal receiveShadow castShadow
         ref={decalRef}
@@ -485,7 +496,8 @@ const DecalItem = ({ decal, meshRef, isFirst }: { decal: any, meshRef: React.Ref
           <meshBasicMaterial wireframe />
         </mesh>
       )}
-    </group>
+    </group>,
+    mesh as unknown as THREE.Object3D
   );
 };
 
@@ -894,7 +906,9 @@ export default function Viewer3D() {
         <GarmentPlaceholder />
         
         <ContactShadows position={[0, -0.75, 0]} opacity={0.6} scale={8} blur={1.8} far={1} />
-        <Environment preset="studio" />
+        <Suspense fallback={null}>
+          <Environment preset="studio" />
+        </Suspense>
         
         <OrbitControls 
           enabled={!isGarmentLocked}
