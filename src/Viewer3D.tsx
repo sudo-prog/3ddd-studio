@@ -336,6 +336,31 @@ const CustomOBJModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: TH
   return <primitive object={clonedObj} />;
 };
 
+// Wraps the GLTF model component and races its (otherwise indefinite) Suspense
+// load against a ~9s timeout. drei's useGLTF has no built-in timeout, so a
+// slow/unreachable .glb would suspend the component forever and the canvas
+// would show an infinite spinner. On timeout we render a visible error
+// fallback with a "Remove model" button instead of hanging. The Suspense
+// boundary in GarmentMeshes stays intact for the normal loading path.
+const CustomGLTFModelLoadGate = ({ url, onMeshReady }: { url: string, onMeshReady: (m: THREE.Mesh[]) => void }) => {
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    setTimedOut(false);
+    const t = setTimeout(() => setTimedOut(true), 9000);
+    return () => clearTimeout(t);
+  }, [url]);
+
+  if (timedOut) {
+    return (
+      <InvalidModelFallback
+        error={new Error('Model timed out loading (over 9s). The file may be too large or the URL is unreachable.')}
+      />
+    );
+  }
+
+  return <CustomGLTFModel url={url} onMeshReady={onMeshReady} />;
+};
+
 
 
 
@@ -576,7 +601,7 @@ export const GarmentMeshes = ({ onMeshReady }: { onMeshReady: (m: THREE.Mesh[]) 
             customModel.type === 'obj' ? (
               <CustomOBJModel url={customModel.url} onMeshReady={handleReady} />
             ) : (
-              <CustomGLTFModel url={customModel.url} onMeshReady={handleReady} />
+              <CustomGLTFModelLoadGate url={customModel.url} onMeshReady={handleReady} />
             )
           ) : null}
         </Suspense>
@@ -776,17 +801,25 @@ const GarmentPlaceholder = () => {
       if (intersects.length > 0) {
         const hit = intersects[0];
         const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
-        const normal = direction.clone().negate();
+        // Use the REAL surface normal from the raycast hit (same as the
+        // correct handleAddDecal path) instead of the old hardcoded `euler`
+        // per-section orientation. The fixed origin/direction of the ray are
+        // kept — only the decal's written orientation comes from the actual
+        // hit normal, so the image lies flush on the surface it landed on.
+        const n = getWorldNormal(hit);
+        const normal = n;
         const depth = probeWallThickness(hit.object as THREE.Mesh, hit.point, normal);
         const placed = nudgeOutward(hit.point, normal);
-        // Convert the world-space hit point & placement rotation into the
-        // target mesh's LOCAL space (see handleAddDecal for why).
+        // Convert the world-space hit point & orientation into the target
+        // mesh's LOCAL space (see handleAddDecal for why).
         const localPoint = worldPointToMeshLocal(hit.object, placed);
-        const worldQ = new THREE.Quaternion().setFromEuler(euler);
+        const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
         const localEuler = worldQuatToMeshLocalEuler(hit.object, worldQ);
         useStore.getState().addDecal(url, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], placement, meshIndex, depth);
       } else {
         const fallback = getFallbackDecalPlacement();
+        // Fallback keeps the old per-section orientation for the rare case
+        // where the ray misses every mesh entirely.
         useStore.getState().addDecal(url, fallback.position, [euler.x, euler.y, euler.z], placement, fallback.meshIndex);
       }
     };

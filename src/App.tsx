@@ -100,6 +100,27 @@ export default function App() {
 
     useEffect(() => {
     const hydrateModels = async () => {
+      // Reattach a File from IndexedDB into a fresh object URL, then prove
+      // the URL is actually alive before trusting it. A blob: URL created
+      // from a File can be dead (revoked, or the persisted reference points
+      // at something that no longer resolves) — loading a dead URL into the
+      // GLTF loader just hangs or throws. HEAD-check it and drop the model
+      // if it doesn't respond, rather than handing the viewer a dead URL.
+      const resolveLiveUrl = async (file: File): Promise<string | null> => {
+        const url = URL.createObjectURL(file);
+        try {
+          const res = await fetch(url, { method: 'HEAD' });
+          if (!res.ok) {
+            URL.revokeObjectURL(url);
+            return null;
+          }
+          return url;
+        } catch (e) {
+          URL.revokeObjectURL(url);
+          return null;
+        }
+      };
+
       let changed = false;
       const { library, customModel } = useStore.getState();
       const updatedLibrary = await Promise.all(library.map(async (item) => {
@@ -107,9 +128,11 @@ export default function App() {
           try {
             const file = await idbGet('file_' + item.customModel.fileId);
             if (file) {
-              const url = URL.createObjectURL(file as File);
-              changed = true;
-              return { ...item, customModel: { ...item.customModel, url } };
+              const url = await resolveLiveUrl(file as File);
+              if (url) {
+                changed = true;
+                return { ...item, customModel: { ...item.customModel, url } };
+              }
             }
           } catch (e) {
             console.error('Failed to load file from IDB', e);
@@ -126,8 +149,13 @@ export default function App() {
         try {
           const file = await idbGet('file_' + customModel.fileId);
           if (file) {
-            const url = URL.createObjectURL(file as File);
-            useStore.setState({ customModel: { ...customModel, url } });
+            const url = await resolveLiveUrl(file as File);
+            if (url) {
+              useStore.setState({ customModel: { ...customModel, url } });
+            } else {
+              // Dead blob URL — clear the model so the viewer doesn't hang.
+              useStore.setState({ customModel: null });
+            }
           }
         } catch (e) {}
       }
@@ -331,7 +359,13 @@ export default function App() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      <Viewer3D />
+      {/* Only ONE live WebGL context at a time. The flat-lay modal mounts its
+          own <Canvas>, and on iOS Safari two simultaneous live WebGL contexts
+          freeze the app. Don't render the main viewer canvas while the modal
+          is open; r3f disposes the main context on unmount and recreates it on
+          close. The session state lives in the zustand store (not in
+          Viewer3D's component state), so unmounting/remounting loses nothing. */}
+      {!flatLayEditorPlacement && <Viewer3D />}
 
       {!modelsHydrated && (
         <div className="absolute inset-0 z-[70] flex items-center justify-center bg-white">
