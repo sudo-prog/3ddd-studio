@@ -1,8 +1,8 @@
 import { EffectComposer } from '@react-three/postprocessing';
 import { DitheringEffect } from './DitheringEffect';
 import React, { forwardRef, useMemo, useRef, useEffect, Suspense, useCallback, useState } from 'react';
-import { Canvas, useThree, useLoader, ThreeEvent, useFrame, createPortal } from '@react-three/fiber';
-import { Html, OrbitControls, Environment, ContactShadows, Decal, useTexture, RoundedBox, useGLTF } from '@react-three/drei';
+import { Canvas, useThree, useLoader } from '@react-three/fiber';
+import { Html, OrbitControls, Environment, ContactShadows, RoundedBox, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -12,6 +12,9 @@ import { useStore } from './store';
 import { ErrorBoundary } from './ErrorBoundary';
 import { useGesture } from '@use-gesture/react';
 import { Lock, Unlock } from 'lucide-react';
+import { GARMENT_PANELS, PanelDef } from './garmentPanels';
+import type { PanelId } from './store';
+import { getPanelTexture, repaintPanel } from './panelTexture';
 
 const DitheringPass = forwardRef((props: any, ref) => {
   // Construct the effect exactly once. The previous deps array was [props],
@@ -28,29 +31,6 @@ const DitheringPass = forwardRef((props: any, ref) => {
   }, [props.gridSize, props.pixelSizeRatio, props.grayscaleOnly, effect]);
   return <primitive ref={ref} object={effect} dispose={null} />;
 });
-
-// three's Mesh raycast fills hit.face.normal (OBJECT space); hit.normal is
-// not guaranteed across three versions. Normalize access in one place and
-// always return a WORLD-space normal.
-export const getWorldNormal = (hit: THREE.Intersection): THREE.Vector3 => {
-  if (hit.face?.normal) return hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
-  if ((hit as any).normal) return (hit as any).normal.clone().transformDirection(hit.object.matrixWorld);
-  return new THREE.Vector3(0, 0, 1);
-};
-
-// drei's <Decal> zeroes the target mesh's world matrix before building
-// DecalGeometry, so decal position/rotation must be expressed in the mesh's
-// LOCAL space. These helpers convert a world-space point / orientation into
-// the target mesh's local space (see AUDIT_AND_FIXES.md in the 20.17 repo:
-// storing world-space hit.point put the projector box off the surface ->
-// empty geometry -> invisible decal on any mesh with a world transform).
-export const worldPointToMeshLocal = (mesh: THREE.Object3D, worldPoint: THREE.Vector3): THREE.Vector3 =>
-  mesh.worldToLocal(worldPoint.clone());
-
-export const worldQuatToMeshLocalEuler = (mesh: THREE.Object3D, worldQ: THREE.Quaternion): THREE.Euler => {
-  const invMeshQ = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
-  return new THREE.Euler().setFromQuaternion(invMeshQ.multiply(worldQ.clone()));
-};
 
 // --- GLTF decoder wiring -------------------------------------------------
 // Most real-world .glb exports (Sketchfab, Blender with compression, CLO3D,
@@ -189,7 +169,7 @@ const CustomGLTFModel = ({ url, onMeshReady }: { url: string, onMeshReady: (m: T
     }, 0);
 
     
-    // Collect meshes and hand them to the parent for decal raycasting.
+    // Collect meshes for GLTF export.
     const meshes: THREE.Mesh[] = [];
     clonedScene.traverse((child) => {
       if (child instanceof THREE.Mesh) {
@@ -364,220 +344,6 @@ const CustomGLTFModelLoadGate = ({ url, onMeshReady }: { url: string, onMeshRead
 
 
 
-const DecalItem = ({ decal, meshRef, isFirst }: { decal: any, meshRef: React.RefObject<THREE.Mesh>, isFirst: boolean }) => {
-  const texture = useTexture(decal.url) as unknown as THREE.Texture;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const isGarmentLocked = useStore(state => state.isGarmentLocked);
-  const activeDecalId = useStore(state => state.activeDecalId);
-  const setActiveDecalId = useStore(state => state.setActiveDecalId);
-  const updateDecal = useStore(state => state.updateDecal);
-  const roughness = useStore(state => state.roughness);
-  const metalness = useStore(state => state.metalness);
-  const isActive = activeDecalId === decal.id;
-  const mesh = meshRef.current;
-  const decalRef = useRef<THREE.Mesh>(null);
-  const proxyRef = useRef<THREE.Mesh>(null);
-  const dragging = useRef(false);
-
-  // Projector depth: the old code hardcoded 1.5, which is far deeper than a
-  // garment wall (~0.2-0.4 units). That let the decal's projector box swallow
-  // the back face of the mesh too, painting the image onto the inside of the
-  // opposite wall - which is what showed up as a mirrored image on the back
-  // and as clipping through the garment. Instead, derive the depth from the
-  // target mesh's own bounding box so the projector box stays inside a single
-  // wall of the garment, with sane floor/ceiling clamps.
-  const decalDepth = useMemo(() => {
-    if (decal.depth) return decal.depth;
-    if (!mesh) return 0.3;
-    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-    const bb = mesh.geometry.boundingBox;
-    if (!bb) return 0.3;
-    const size = new THREE.Vector3();
-    bb.getSize(size);
-    const smallestDim = Math.min(size.x, size.y, size.z) || 0.3;
-    return Math.min(0.6, Math.max(0.08, smallestDim * 0.6));
-  }, [mesh, decal.depth]);
-
-  const targetPos = useRef(new THREE.Vector3(decal.position[0], decal.position[1], decal.position[2]));
-  const targetRot = useRef(new THREE.Euler(decal.rotation[0], decal.rotation[1], decal.rotation[2]));
-
-  useEffect(() => {
-    targetPos.current.set(decal.position[0], decal.position[1], decal.position[2]);
-    targetRot.current.set(decal.rotation[0], decal.rotation[1], decal.rotation[2]);
-    if (!isActive && proxyRef.current) {
-      proxyRef.current.position.set(decal.position[0], decal.position[1], decal.position[2]);
-      proxyRef.current.rotation.set(decal.rotation[0], decal.rotation[1], decal.rotation[2]);
-    }
-  }, [decal.position, decal.rotation, isActive]);
-
-  useFrame((state, delta) => {
-    if (proxyRef.current && isActive && isGarmentLocked) {
-      proxyRef.current.position.lerp(targetPos.current, 0.25);
-      const currentQ = new THREE.Quaternion().setFromEuler(proxyRef.current.rotation);
-      const targetQ = new THREE.Quaternion().setFromEuler(targetRot.current);
-      currentQ.slerp(targetQ, 0.25);
-      proxyRef.current.rotation.setFromQuaternion(currentQ);
-    }
-  });
-
-  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-    if (!useStore.getState().isGarmentLocked) return;
-    e.stopPropagation();
-    setActiveDecalId(decal.id);
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-    dragging.current = true;
-  };
-
-  const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!useStore.getState().isGarmentLocked || !dragging.current || !mesh) return;
-    e.stopPropagation();
-    const raycaster = new THREE.Raycaster();
-    raycaster.ray.copy(e.ray);
-    const intersects = raycaster.intersectObject(mesh, false);
-    if (intersects.length > 0) {
-      const intersection = intersects[0];
-      if (intersection.face) {
-        const n = intersection.face.normal.clone();
-        n.transformDirection(mesh.matrixWorld);
-        // Decal position/rotation live in the mesh's LOCAL space (drei's
-        // <Decal> zeroes the mesh's world matrix while building
-        // DecalGeometry), so convert the world-space drag hit to local
-        // before storing it - otherwise dragging a decal on a transformed
-        // mesh made it jump off the surface.
-        const nudged = intersection.point.clone().addScaledVector(n, 0.004);
-        targetPos.current.copy(mesh.worldToLocal(nudged));
-        const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        const invMeshQ = mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
-        targetRot.current.setFromQuaternion(invMeshQ.multiply(worldQ));
-      }
-    }
-  };
-
-  const handlePointerUp = useCallback((e?: any) => {
-    if (!useStore.getState().isGarmentLocked) return;
-    if (!dragging.current) return;
-    dragging.current = false;
-    
-    if (isFirst) {
-      const wp = targetPos.current.clone();
-      const we = targetRot.current.clone();
-      
-      updateDecal(decal.id, {
-        position: [wp.x, wp.y, wp.z],
-        rotation: [we.x, we.y, we.z]
-      });
-    }
-  }, [decal.id, updateDecal, isFirst]);
-
-  const handleDoubleClick = (e: ThreeEvent<PointerEvent>) => {
-    if (!useStore.getState().isGarmentLocked) return;
-    e.stopPropagation();
-    useStore.getState().removeDecal(decal.id);
-  };
-
-  if (!mesh) return null;
-
-  // The decal's geometry is built in the TARGET MESH'S LOCAL SPACE (drei's
-  // <Decal> zeroes the mesh's world matrix while running DecalGeometry), so
-  // the decal mesh itself must inherit the target mesh's world transform to
-  // render on its surface. Rendering it under a plain identity <group> (the
-  // previous code) only worked when the target mesh's matrixWorld happened
-  // to be identity - i.e. the placeholder torso at the origin. Every custom
-  // GLB/OBJ is auto-scaled (3/maxDim) and recentered, and the placeholder
-  // arms are translated/rotated, so decals on those rendered detached from
-  // the surface (wrong position AND wrong size) or fully off-screen.
-  // createPortal parents the decal into the actual mesh, restoring the
-  // canonical drei usage.
-  return createPortal(
-    <group>
-      <Decal receiveShadow castShadow
-        ref={decalRef}
-        mesh={meshRef}
-        position={[decal.position[0], decal.position[1], decal.position[2]]}
-        rotation={[decal.rotation[0], decal.rotation[1], decal.rotation[2]]}
-        scale={[decal.scale[0], decal.scale[1], decalDepth]}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onDoubleClick={handleDoubleClick}
-      >
-        <meshStandardMaterial
-          map={texture}
-          transparent
-          alphaTest={0.01}
-          depthTest={true}
-          depthWrite={false}
-          roughness={roughness}
-          metalness={metalness}
-          polygonOffset
-          polygonOffsetFactor={-4}
-          polygonOffsetUnits={-4}
-        />
-      </Decal>
-      
-      {!(isActive && dragging.current) && (
-        <mesh ref={proxyRef} visible={false}>
-          <boxGeometry args={[decal.scale[0], decal.scale[1], decalDepth]} />
-          <meshBasicMaterial wireframe />
-        </mesh>
-      )}
-    </group>,
-    mesh as unknown as THREE.Object3D
-  );
-};
-
-class DecalErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, errorInfo) {
-    console.error("Decal Error:", error, errorInfo);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <Html center position={[0, 1, 0]}>
-          <div style={{ background: 'red', color: 'white', padding: '10px', width: '200px' }}>
-            DECAL ERROR: {this.state.error?.message}
-          </div>
-        </Html>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-const DecalsContainer = ({ meshesRef }: { meshesRef: React.RefObject<THREE.Mesh[]> }) => {
-  const decals = useStore(state => state.decals);
-  return (
-    <>
-      {decals.map((decal) => {
-        const meshes = meshesRef.current;
-        if (!meshes || meshes.length === 0) return null;
-        // Each decal is bound to exactly one mesh (the one it was actually
-        // placed/hit on). Previously this doubled as a nested loop over every
-        // mesh in the garment, so a single decal on the torso would also get
-        // stamped onto both sleeves (and any other mesh) at the same
-        // position/rotation. See AUDIT_AND_FIXES.md, item 1.
-        const meshIndex = Math.min(decal.meshIndex ?? 0, meshes.length - 1);
-        const mesh = meshes[meshIndex];
-        if (!mesh) return null;
-        return (
-          <DecalErrorBoundary key={decal.id}>
-            <Suspense fallback={null}>
-              <DecalItem decal={decal} meshRef={{ current: mesh }} isFirst={true} />
-            </Suspense>
-          </DecalErrorBoundary>
-        );
-      })}
-    </>
-  );
-};
-
 export const GarmentMeshes = ({ onMeshReady }: { onMeshReady: (m: THREE.Mesh[]) => void }) => {
   const { color, roughness, metalness, customModel, garment } = useStore();
   const collectedRef = useRef(false);
@@ -668,170 +434,19 @@ export const GarmentMeshes = ({ onMeshReady }: { onMeshReady: (m: THREE.Mesh[]) 
 };
 
 const GarmentPlaceholder = () => {
-  const { color, roughness, metalness, exportTrigger, customModel, garment } = useStore();
+  const { color, roughness, metalness, exportTrigger, customModel, garment, decals } = useStore();
   const groupRef = useRef<THREE.Group>(null);
-  const meshesRef = useRef<THREE.Mesh[]>([]);
-  const meshCollectScheduled = useRef(false);
-  const [meshesReady, setMeshesReady] = useState(false);
+  const libraryItemId = useStore(s => s.activeId);
 
-  const handleCustomMeshReady = useCallback((nodes: THREE.Mesh[]) => {
-    meshesRef.current = nodes;
-    setMeshesReady(true);
+  const meshCollectorRef = useRef<THREE.Mesh[]>([]);
+
+  const handleMeshReady = useCallback((nodes: THREE.Mesh[]) => {
+    meshCollectorRef.current = nodes;
   }, []);
 
   useEffect(() => {
-    setMeshesReady(false);
-    meshesRef.current = [];
-    meshCollectScheduled.current = false;
+    meshCollectorRef.current = [];
   }, [customModel, garment]);
-
-  const { controls, camera, gl } = useThree();
-
-  // Measures actual wall thickness at the exact point a decal is being
-  // placed by firing a short probe ray back into the mesh from just outside
-  // the surface. Using one number derived from the whole garment's bounding
-  // box (the previous approach) doesn't work for irregular custom models -
-  // it can be far too deep at a thin point (letting the image bleed through
-  // to the inside, which showed up as the image appearing "inside" the
-  // model or hidden behind the fabric via z-fighting) or too shallow
-  // elsewhere. Falls back to a safe default for single-sided/shell meshes
-  // that have no measurable back wall.
-  const probeWallThickness = (mesh: THREE.Mesh, point: THREE.Vector3, normal: THREE.Vector3): number => {
-    try {
-      const probeOrigin = point.clone().addScaledVector(normal, 0.5);
-      const probeDir = normal.clone().negate();
-      const probeRay = new THREE.Raycaster(probeOrigin, probeDir, 0, 2);
-      const hits = probeRay.intersectObject(mesh, true);
-      if (hits.length >= 2) {
-        const thickness = Math.abs(hits[1].distance - hits[0].distance);
-        if (thickness > 0.01) return Math.min(0.5, Math.max(0.06, thickness * 0.85));
-      }
-    } catch (e) { /* fall through to default */ }
-    return 0.2;
-  };
-
-  // Pushes the placement point a hair off the surface along its normal so
-  // the decal projector isn't centered exactly ON the fabric (which, at
-  // floating point precision, can land on the wrong side of a thin wall or
-  // z-fight with the fabric mesh underneath it).
-  const nudgeOutward = (point: THREE.Vector3, normal: THREE.Vector3, eps = 0.004) =>
-    point.clone().addScaledVector(normal, eps);
-
-  // If a raycast for decal placement misses entirely (e.g. dropped right at
-  // the silhouette edge), fall back to a point actually on the first real
-  // mesh's surface - derived from its own bounding box - instead of a fixed
-  // [0,0,0.15] that was tuned for the placeholder shape and can miss a
-  // custom uploaded model's geometry completely (producing an invisible,
-  // empty decal with no error). NOTE: decal transforms are stored in the
-  // target mesh's LOCAL space (drei <Decal> zeroes the mesh's world matrix),
-  // so this stays in the mesh's local bounding-box space on purpose.
-  const getFallbackDecalPlacement = (): { position: [number, number, number]; rotation: [number, number, number]; meshIndex: number } => {
-    const mesh = meshesRef.current[0];
-    if (!mesh) return { position: [0, 0, 0.15], rotation: [0, 0, 0], meshIndex: 0 };
-    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-    const bb = mesh.geometry.boundingBox;
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
-    if (bb) { bb.getSize(size); bb.getCenter(center); }
-    // Nudge toward the camera-facing side of the mesh's own bounding box
-    // rather than assuming a fixed depth.
-    const zOffset = (size.z || 0.3) * 0.45;
-    return { position: [center.x, center.y, center.z + zOffset], rotation: [0, 0, 0], meshIndex: 0 };
-  };
-
-  useEffect(() => {
-    const handleAddDecal = (e: any) => {
-      const { url, clientX, clientY } = e.detail;
-      const x = (clientX / window.innerWidth) * 2 - 1;
-      const y = -(clientY / window.innerHeight) * 2 + 1;
-      
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
-      
-      const intersects = raycaster.intersectObjects(meshesRef.current, true);
-      if (intersects.length > 0) {
-        const hit = intersects[0];
-
-        const n = getWorldNormal(hit);
-        const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
-        const depth = probeWallThickness(hit.object as THREE.Mesh, hit.point, n);
-        const placed = nudgeOutward(hit.point, n);
-
-        // drei's <Decal> zeroes the target mesh's world matrix before building
-        // DecalGeometry, so position/rotation are interpreted in the mesh's
-        // LOCAL space. Convert the world-space raycast hit into local space.
-        const localPoint = worldPointToMeshLocal(hit.object, placed);
-        const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        const localEuler = worldQuatToMeshLocalEuler(hit.object, worldQ);
-        useStore.getState().addDecal(url, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], 'front', meshIndex, depth);
-
-      } else {
-        const fallback = getFallbackDecalPlacement();
-        useStore.getState().addDecal(url, fallback.position, fallback.rotation, 'front', fallback.meshIndex);
-      }
-    };
-    
-    const handleAddDecalPlacement = (e: any) => {
-      const { url, placement } = e.detail;
-      let origin = new THREE.Vector3();
-      let direction = new THREE.Vector3();
-      let euler = new THREE.Euler();
-
-      if (placement === 'front') {
-        origin.set(0, 0, 5);
-        direction.set(0, 0, -1);
-        euler.set(0, 0, 0);
-      } else if (placement === 'back') {
-        origin.set(0, 0, -5);
-        direction.set(0, 0, 1);
-        euler.set(0, Math.PI, 0);
-      } else if (placement === 'left_arm') {
-        origin.set(-5, 0.4, 0);
-        direction.set(1, 0, 0);
-        euler.set(0, -Math.PI / 2, 0);
-      } else if (placement === 'right_arm') {
-        origin.set(5, 0.4, 0);
-        direction.set(-1, 0, 0);
-        euler.set(0, Math.PI / 2, 0);
-      }
-
-      const raycaster = new THREE.Raycaster(origin, direction);
-      const intersects = raycaster.intersectObjects(meshesRef.current, true);
-      
-      if (intersects.length > 0) {
-        const hit = intersects[0];
-        const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
-        // Use the REAL surface normal from the raycast hit (same as the
-        // correct handleAddDecal path) instead of the old hardcoded `euler`
-        // per-section orientation. The fixed origin/direction of the ray are
-        // kept — only the decal's written orientation comes from the actual
-        // hit normal, so the image lies flush on the surface it landed on.
-        const n = getWorldNormal(hit);
-        const normal = n;
-        const depth = probeWallThickness(hit.object as THREE.Mesh, hit.point, normal);
-        const placed = nudgeOutward(hit.point, normal);
-        // Convert the world-space hit point & orientation into the target
-        // mesh's LOCAL space (see handleAddDecal for why).
-        const localPoint = worldPointToMeshLocal(hit.object, placed);
-        const worldQ = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        const localEuler = worldQuatToMeshLocalEuler(hit.object, worldQ);
-        useStore.getState().addDecal(url, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], placement, meshIndex, depth);
-      } else {
-        const fallback = getFallbackDecalPlacement();
-        // Fallback keeps the old per-section orientation for the rare case
-        // where the ray misses every mesh entirely.
-        useStore.getState().addDecal(url, fallback.position, [euler.x, euler.y, euler.z], placement, fallback.meshIndex);
-      }
-    };
-
-    window.addEventListener('add-decal-3d', handleAddDecal);
-    window.addEventListener('add-decal-placement', handleAddDecalPlacement);
-    return () => {
-      window.removeEventListener('add-decal-3d', handleAddDecal);
-      window.removeEventListener('add-decal-placement', handleAddDecalPlacement);
-    };
-  }, [camera, meshesRef]);
-  
 
   useEffect(() => {
     if (exportTrigger > 0 && groupRef.current) {
@@ -859,27 +474,41 @@ const GarmentPlaceholder = () => {
   }, [exportTrigger]);
 
   
+  const activeId = libraryItemId;
+
+  // Assign canvas textures to meshes that match garment panel definitions
+  useEffect(() => {
+    if (!activeId) return;
+    const panelDefs = GARMENT_PANELS[activeId];
+    if (!panelDefs) return;
+    const meshes = meshCollectorRef.current;
+    if (meshes.length === 0) return;
+
+    const allPanelKeys = Object.values(panelDefs) as PanelDef[];
+    for (const def of allPanelKeys) {
+      const panelId = def.meshName.split('_').pop()?.toLowerCase() as PanelId || 'front';
+      for (const mesh of meshes) {
+        if (!mesh.material) continue;
+        const material = mesh.material.clone() as THREE.MeshStandardMaterial;
+        material.color.set('#ffffff');
+        material.map = getPanelTexture(activeId, panelId, def);
+        mesh.material = material;
+      }
+    }
+  }, [activeId, customModel, garment]);
+
+  useEffect(() => {
+    if (!activeId) return;
+    const def = GARMENT_PANELS[activeId]?.front;
+    if (!def) return;
+    const activeDecals = useStore.getState().decals;
+    const activeColor = useStore.getState().color;
+    repaintPanel(activeId, 'front', activeColor, activeDecals);
+  }, [decals, color, activeId]);
+
   return (
-    <group 
-      ref={groupRef} 
-      position={[0, 0, 0]}
-      onPointerDown={(e) => {
-        // Deselect the active decal when tapping empty garment space.
-        // Guard the intersections access - it can be empty when the event
-        // bubbles from a miss, and [0].object would throw.
-        if (useStore.getState().isGarmentLocked && e.intersections.length > 0) {
-           useStore.getState().setActiveDecalId(null);
-        }
-      }}
-      onDoubleClick={(e) => {
-        e.stopPropagation();
-        if (controls) {
-          (controls as any).reset();
-        }
-      }}
-    >
-      <GarmentMeshes onMeshReady={handleCustomMeshReady} />
-      {meshesReady && meshesRef.current.length > 0 && <DecalsContainer meshesRef={meshesRef} />}
+    <group ref={groupRef} position={[0, 0, 0]}>
+      <GarmentMeshes onMeshReady={handleMeshReady} />
     </group>
   );
 };
@@ -902,33 +531,10 @@ const PostProcessingContainer = () => {
 };
 
 export default function Viewer3D() {
-  const { isGarmentLocked, setIsGarmentLocked, activeDecalId, decals, updateDecal } = useStore();
-
-  const bind = useGesture({
-    onPinch: ({ delta: [dd], event }) => {
-      const state = useStore.getState();
-      if (!state.isGarmentLocked || !state.activeDecalId) return;
-      if (event && (event as any).preventDefault) (event as any).preventDefault();
-      const decal = state.decals.find(d => d.id === state.activeDecalId);
-      if (!decal) return;
-      // dd is delta distance
-      const factor = 1 + dd / 150;
-      const newScale = decal.scale.map(s => Math.max(0.05, s * factor)) as [number, number, number];
-      state.updateDecal(state.activeDecalId, { scale: newScale });
-    },
-    onWheel: ({ delta: [, dy], event }) => {
-      const state = useStore.getState();
-      if (!state.isGarmentLocked || !state.activeDecalId) return;
-      const decal = state.decals.find(d => d.id === state.activeDecalId);
-      if (!decal) return;
-      const factor = dy > 0 ? 0.95 : 1.05;
-      const newScale = decal.scale.map(s => Math.max(0.05, s * factor)) as [number, number, number];
-      state.updateDecal(state.activeDecalId, { scale: newScale });
-    }
-  }) as any;
+  const { isGarmentLocked, setIsGarmentLocked } = useStore();
 
   return (
-    <div {...bind()} className={`w-full h-full absolute inset-0 z-0 bg-[#fcfcfc] ${isGarmentLocked ? 'touch-none' : ''}`}>
+    <div className={`w-full h-full absolute inset-0 z-0 bg-[#fcfcfc] ${isGarmentLocked ? 'touch-none' : ''}`}>
       <Canvas shadows camera={{ position: [0, 0, 5], fov: 45 }}>
         <color attach="background" args={['#fcfcfc']} />
         <ambientLight intensity={0.3} />

@@ -341,7 +341,9 @@ export default function App() {
           if (p >= 100) {
             clearInterval(interval);
             setFakeUploadProgress(null);
-            window.dispatchEvent(new CustomEvent('add-decal-3d', { detail: { url: dataUrl, clientX: e.clientX, clientY: e.clientY } }));
+            // Decal placement now goes through FlatLayEditor only —
+            // the old raycast-on-drop flow has been removed.
+            setFlatLayEditorPlacement('front');
           } else {
             setFakeUploadProgress(p);
           }
@@ -792,25 +794,6 @@ export default function App() {
                 useStore.getState().addUploadedImage(url);
                 if (editingImage.id) {
                   useStore.getState().updateDecal(editingImage.id, { url });
-                } else {
-                  if (editingImage.placement) {
-                    window.dispatchEvent(new CustomEvent('add-decal-placement', { detail: { url, placement: editingImage.placement } }));
-                  } else if (editingImage.clientX !== undefined && editingImage.clientY !== undefined) {
-                    window.dispatchEvent(new CustomEvent('add-decal-3d', { detail: { url, clientX: editingImage.clientX, clientY: editingImage.clientY } }));
-                  } else {
-                    // No click position and no section chosen (the plain
-                    // "Upload Image" button) - previously this called
-                    // addDecal(url) with a hardcoded guessed position and
-                    // mesh index 0, which only worked for the built-in
-                    // placeholder shape. For a custom uploaded model, mesh
-                    // 0 is whatever happened to come first in the file and
-                    // that fixed point often doesn't even touch its
-                    // surface, so the decal geometry came out empty -
-                    // nothing rendered, with no error. Raycast from the
-                    // center of the screen against whatever garment is
-                    // actually there instead of guessing.
-                    window.dispatchEvent(new CustomEvent('add-decal-3d', { detail: { url, clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 } }));
-                  }
                 }
                 setEditingImage(null);
               }} 

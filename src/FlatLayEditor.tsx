@@ -1,78 +1,14 @@
-import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrthographicCamera } from '@react-three/drei';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Canvas } from '@react-three/fiber';
 import * as THREE from 'three';
-import { X, Upload, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
-import { GarmentMeshes, getWorldNormal, worldPointToMeshLocal, worldQuatToMeshLocalEuler } from './Viewer3D';
+import { X, Upload } from 'lucide-react';
 import { useStore } from './store';
+import { GarmentMeshes } from './Viewer3D';
 import { ImageEditor } from './ImageEditor';
+import { repaintPanel } from './panelTexture';
 
-type Placement = 'front' | 'back' | 'left_arm' | 'right_arm';
-
-const CAMERA_SETUP: Record<Placement, { position: [number, number, number]; lookAt: [number, number, number]; up: [number, number, number] }> = {
-  front: { position: [0, 0, 5], lookAt: [0, 0, 0], up: [0, 1, 0] },
-  back: { position: [0, 0, -5], lookAt: [0, 0, 0], up: [0, 1, 0] },
-  left_arm: { position: [-5, 0.4, 0], lookAt: [0, 0.4, 0], up: [0, 1, 0] },
-  right_arm: { position: [5, 0.4, 0], lookAt: [0, 0.4, 0], up: [0, 1, 0] },
-};
-
-const BASE_HALF_SIZE = 2.2;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 3;
-
-type Box = { x: number; y: number; w: number; h: number; rotation: number };
-
-// Grabs the live camera/scene from inside the R3F canvas so the modal shell
-// (which needs it for the raycast-on-save math) can get at it without
-// duplicating a whole extra copy of the 3D scene setup.
-const SceneBridge = ({
-  placement,
-  previewZoom,
-  onCameraReady,
-  onMeshesReady,
-}: {
-  placement: Placement;
-  previewZoom: number;
-  onCameraReady: (cam: THREE.OrthographicCamera) => void;
-  onMeshesReady: (m: THREE.Mesh[]) => void;
-}) => {
-  const { size } = useThree();
-  const cameraRef = useRef<THREE.OrthographicCamera>(null);
-
-  useEffect(() => {
-    const cam = cameraRef.current;
-    if (!cam) return;
-    const aspect = size.width / size.height;
-    const halfSize = BASE_HALF_SIZE / previewZoom;
-    cam.left = -halfSize * aspect;
-    cam.right = halfSize * aspect;
-    cam.top = halfSize;
-    cam.bottom = -halfSize;
-    cam.near = 0.01;
-    cam.far = 20;
-    const setup = CAMERA_SETUP[placement];
-    cam.position.set(...setup.position);
-    cam.up.set(...setup.up);
-    cam.lookAt(new THREE.Vector3(...setup.lookAt));
-    cam.updateProjectionMatrix();
-    onCameraReady(cam);
-  }, [placement, previewZoom, size.width, size.height, onCameraReady]);
-
-  return (
-    <>
-      {/* makeDefault so the on-screen render uses the SAME camera the
-          raycast-on-save math uses - otherwise the preview showed the
-          default canvas camera (always the front) while the save raycast
-          fired from the placement camera. `manual` stops drei from
-          overwriting the frustum we set above. */}
-      <OrthographicCamera ref={cameraRef} makeDefault manual />
-      <ambientLight intensity={1.1} />
-      <directionalLight position={[2, 3, 4]} intensity={1.2} />
-      <directionalLight position={[-2, -1, -4]} intensity={0.4} />
-      <GarmentMeshes onMeshReady={onMeshesReady} />
-    </>
-  );
-};
 
 const angleBetween = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI);
@@ -81,14 +17,10 @@ const distBetween = (a: { x: number; y: number }, b: { x: number; y: number }) =
 
 export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; onClose: () => void }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
-  const meshesRef = useRef<THREE.Mesh[]>([]);
 
   const [rawImageForEdit, setRawImageForEdit] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [box, setBox] = useState<Box>({ x: 0.35, y: 0.35, w: 0.3, h: 0.3, rotation: 0 });
-  const [isDraggingOverDrop, setIsDraggingOverDrop] = useState(false);
-  const [previewZoom, setPreviewZoom] = useState(1);
 
   // Tracks every active pointer on the box (by pointerId) so we can tell a
   // one-finger drag (move) apart from a two-finger touch (pinch to
@@ -103,8 +35,7 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
     startPointer: { x: number; y: number };
   }>({ mode: null, startBox: box, startDist: 0, startAngle: 0, startCenter: { x: 0, y: 0 }, startPointer: { x: 0, y: 0 } });
 
-  const handleCameraReady = useCallback((cam: THREE.OrthographicCamera) => { cameraRef.current = cam; }, []);
-  const handleMeshesReady = useCallback((m: THREE.Mesh[]) => { meshesRef.current = m; }, []);
+  const handleMeshesReady = useCallback((m: THREE.Mesh[]) => { }, []);
 
   const loadFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -244,63 +175,10 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
   };
 
   const handleSave = () => {
-    if (!pendingImage || !cameraRef.current || !containerRef.current || meshesRef.current.length === 0) {
-      onClose();
-      return;
-    }
-    const camera = cameraRef.current;
-
-    const cx = box.x + box.w / 2;
-    const cy = box.y + box.h / 2;
-    const ndcX = cx * 2 - 1;
-    const ndcY = -(cy * 2 - 1);
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-    const intersects = raycaster.intersectObjects(meshesRef.current, true);
-
-    const worldWidth = camera.right - camera.left;
-    const worldHeight = camera.top - camera.bottom;
-    const scaleX = box.w * worldWidth;
-    const scaleY = box.h * worldHeight;
-
-    if (intersects.length > 0) {
-      const hit = intersects[0];
-      const n = getWorldNormal(hit);
-      const alignQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-      // Fold the on-screen rotation (from the two-finger twist gesture)
-      // into the decal's final orientation, rolled around its own
-      // projection axis before being aligned to the surface normal.
-      const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(-box.rotation));
-      const finalQuat = alignQuat.clone().multiply(rollQuat);
-      const meshIndex = Math.max(0, meshesRef.current.indexOf(hit.object as THREE.Mesh));
-
-      const probeOrigin = hit.point.clone().addScaledVector(n, 0.5);
-      let depth = 0.2;
-      try {
-        const probe = new THREE.Raycaster(probeOrigin, n.clone().negate(), 0, 2);
-        const hits = probe.intersectObject(hit.object, true);
-        if (hits.length >= 2) {
-          const t = Math.abs(hits[1].distance - hits[0].distance);
-          if (t > 0.01) depth = Math.min(0.5, Math.max(0.06, t * 0.85));
-        }
-      } catch (e) {}
-
-      const placed = hit.point.clone().addScaledVector(n, 0.004);
-
-      // drei's <Decal> interprets position/rotation in the target mesh's
-      // LOCAL space - convert before storing (see Viewer3D helpers).
-      const localPoint = worldPointToMeshLocal(hit.object, placed);
-      const localEuler = worldQuatToMeshLocalEuler(hit.object, finalQuat);
-
-      const store = useStore.getState();
-      store.addDecal(pendingImage, [localPoint.x, localPoint.y, localPoint.z], [localEuler.x, localEuler.y, localEuler.z], placement, meshIndex, depth);
-      const newId = useStore.getState().activeDecalId;
-      if (newId) {
-        store.updateDecal(newId, { scale: [scaleX, scaleY, 1] });
-      }
-    }
-
+    if (!pendingImage) { onClose(); return; }
+    useStore.getState().addDecal(placement, pendingImage, {
+      x: box.x, y: box.y, w: box.w, h: box.h, rotation: box.rotation,
+    });
     onClose();
   };
 
@@ -320,7 +198,7 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
           onDrop={handleDrop}
         >
           <Canvas orthographic dpr={[1, 2]} gl={{ preserveDrawingBuffer: true }}>
-            <SceneBridge placement={placement} previewZoom={previewZoom} onCameraReady={handleCameraReady} onMeshesReady={handleMeshesReady} />
+            <SceneBridge onMeshesReady={handleMeshesReady} />
           </Canvas>
 
           {pendingImage ? (

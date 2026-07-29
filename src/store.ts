@@ -76,26 +76,18 @@ const idbStorage: StateStorage = {
 
 export type GarmentType = 'tshirt' | 'hoodie' | 'bomber' | string;
 
+export type PanelId = 'front' | 'back' | 'left_arm' | 'right_arm';
 
 export type Decal = {
   id: string;
   url: string;
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  placement?: string;
-  // Index into the garment's mesh list this decal is projected onto.
-  // Without this, a decal had no way to know which mesh it belonged to,
-  // so it was rendered on every mesh in the garment (see AUDIT_AND_FIXES.md).
-  meshIndex?: number;
-  // Measured wall thickness at the exact point the decal was placed, used
-  // as the depth of its projector box. A single number derived from the
-  // whole garment's bounding box doesn't work for irregular custom models -
-  // it can be too deep (bleeding through to the inside, which is what
-  // showed up as the image floating "inside" the model or hidden behind
-  // the fabric due to z-fighting) or too shallow depending on where on the
-  // model the decal actually landed.
-  depth?: number;
+  panel: PanelId;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  rotation: number;
+  zIndex: number;
 };
 
 export interface MaterialState {
@@ -166,10 +158,9 @@ interface AppState {
   setMaterialConfig: (name: string, config: Partial<MaterialState>) => void;
   initMaterialsConfig: (defaultConfigs: Record<string, MaterialState>) => void;
 
-  addDecal: (url: string, position?: [number, number, number], rotation?: [number, number, number], placement?: string, meshIndex?: number, depth?: number) => void;
-  addDecalWithPlacement: (url: string, placement: 'front'|'back'|'left_arm'|'right_arm') => void;
+  addDecal: (panel: PanelId, url: string, box: { x: number; y: number; w: number; h: number; rotation: number }) => void;
   removeDecal: (id: string) => void;
-  updateDecal: (id: string, updates: Partial<Decal>) => void;
+  updateDecal: (id: string, updates: Partial<Pick<Decal, 'x'|'y'|'w'|'h'|'rotation'|'zIndex'>>) => void;
   setCustomModel: (model: { url: string, type: 'obj' | 'glb', fileId?: string } | null) => void;
   createCustomModelItem: (name: string, model: { url: string, type: 'obj' | 'glb', fileId?: string }) => void;
 
@@ -264,66 +255,23 @@ export const useStore = create<AppState>()(
      library: state.library.map(i => i.id === state.activeId ? { ...i, metalness } : i) 
    })),
   
-  addDecalWithPlacement: (url, placement) => set((state) => {
+  addDecal: (panel, url, box) => set((state) => {
     const newId = uuidv4();
-    let position: [number, number, number] = [0, 0, 0.31];
-    let rotation: [number, number, number] = [0, 0, 0];
-    // Placement -> default mesh index for the built-in placeholder garments
-    // (0 = torso, 1 = left arm, 2 = right arm). Custom uploaded models only
-    // ever get meshIndex 0 unless a real raycast hit resolved a different one.
-    let meshIndex = 0;
-
-    if (placement === 'front') {
-      position = [0, 0, 0.15];
-      rotation = [0, 0, 0];
-      meshIndex = 0;
-    } else if (placement === 'back') {
-      position = [0, 0, -0.15];
-      rotation = [0, Math.PI, 0];
-      meshIndex = 0;
-    } else if (placement === 'left_arm') {
-      position = [-1.0, 0.4, 0.25];
-      rotation = [0, -Math.PI / 2, 0];
-      meshIndex = 1;
-    } else if (placement === 'right_arm') {
-      position = [1.0, 0.4, 0.25];
-      rotation = [0, Math.PI / 2, 0];
-      meshIndex = 2;
-    }
-    
-    const newDecals = [...state.decals, {
+    const newDecal: Decal = {
       id: newId,
       url,
-      position,
-      rotation,
-      scale: [1, 1, 1] as [number, number, number],
-      placement,
-      meshIndex
-    }];
-    return {
-      decals: newDecals,
-      activeDecalId: newId,
-      
-      library: state.library.map(i => i.id === state.activeId ? { ...i, decals: newDecals } : i)
+      panel,
+      x: box.x,
+      y: box.y,
+      w: box.w,
+      h: box.h,
+      rotation: box.rotation,
+      zIndex: state.decals.length,
     };
-  }),
-  
-  addDecal: (url, position, rotation, placement = 'front', meshIndex = 0, depth) => set((state) => {
-    const newId = uuidv4();
-    const newDecals = [...state.decals, {
-      id: newId,
-      url,
-      position: position || ([0, 0, 0.15] as [number, number, number]),
-      rotation: rotation || [0, 0, 0] as [number, number, number],
-      scale: [1, 1, 1] as [number, number, number],
-      placement: placement as any,
-      meshIndex,
-      depth
-    }];
+    const newDecals = [...state.decals, newDecal];
     return {
       decals: newDecals,
       activeDecalId: newId,
-      
       library: state.library.map(i => i.id === state.activeId ? { ...i, decals: newDecals } : i)
     };
   }),
@@ -468,13 +416,17 @@ export const useStore = create<AppState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
+          // Migrate: drop any decals that still have the old 3D-space shape
+          // (meshIndex or position fields). These can't be converted to UV
+          // space and must be discarded per spec §2.1.
+          const isOldDecal = (d: any) => 'meshIndex' in d || 'position' in d;
           state.library = state.library.map(item => ({
             ...item,
             customModel: item.customModel?.fileId ? { ...item.customModel, url: '' } : (item.customModel?.url.startsWith('blob:') ? null : item.customModel),
-            decals: item.decals.filter(d => !d.url.startsWith('blob:'))
+            decals: item.decals.filter(d => !d.url.startsWith('blob:') && !isOldDecal(d))
           }));
           state.customModel = state.customModel?.url.startsWith('blob:') ? null : state.customModel;
-          state.decals = state.decals.filter(d => !d.url.startsWith('blob:'));
+          state.decals = state.decals.filter(d => !d.url.startsWith('blob:') && !isOldDecal(d));
           // Always ensure the seeded user garments are present, even if the
           // persisted library (e.g. from a session where upload failed) is empty
           // or was saved before the seeds existed. Merge by id, don't duplicate.
