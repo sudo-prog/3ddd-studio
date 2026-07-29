@@ -467,3 +467,7 @@ IndexedDB state holds a dead `blob:`/`customModel` URL can get stuck on
 `LOADING_MODEL... 0%` with no timeout/fallback. Fresh visitors and valid seeded
 models load fine. Tracked for a follow-up (add a load timeout + fallback to the
 placeholder).
+- Modified: `src/store.ts` (new `PanelId` type, UV-space `Decal` with `panel/x/y/w/h/rotation/zIndex` fields, new `addDecal`/`updateDecal`/`removeDecal` actions), `src/Viewer3D.tsx` (material cloning + canvas texture assignment + `repaintPanel` useEffect), `src/FlatLayEditor.tsx` (simplified `handleSave` commits box to store, removed raycasting)
+- Deleted: `src/meshRegistry.ts`, old raycast helpers in `Viewer3D.tsx` (`getWorldNormal`, `worldPointToMeshLocal`, `worldQuatToMeshLocalEuler`, `handleAddDecal`, `handleAddDecalPlacement`), `DecalsContainer`/`DecalItem` components using drei's `<Decal>`
+
+**Benefits by construction:** no more placement bugs (decal-inside-garment, wrong-angle projection), instant 3D preview while dragging in flat-lay editor, simpler app (no per-frame GPU raycasting), multiple designs per panel with z-index reordering, trivial garment color changes (just redraw the canvas).

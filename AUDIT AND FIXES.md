@@ -412,3 +412,10 @@ Changes:
   while placing an image, without that affecting the image's scale.
 
 
+
+## Round 7: UV Texture Painting Overhaul
+
+**Replaces** the raycast-projected-decal system (source of every placement bug across Rounds 1-6) with a UV/canvas texture-painting system — the same class of technique VirtualThreads uses.
+
+**What changed:**
+- New files: `src/garmentPanels.ts` (per-garment panel UV definitions), `src/panelTexture.ts` (zero-dependency canvas texture painting module)
