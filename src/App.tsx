@@ -91,7 +91,7 @@ export default function App() {
 
   const { 
     activeId, library, garment, materialsConfig, availableMaterials, color, setColor, roughness, setRoughness, metalness, setMetalness, 
-    setMaterialConfig, addDecal, addDecalWithPlacement, decals, removeDecal, customModel, 
+    setMaterialConfig, addDecal, decals, removeDecal, customModel, 
     setCustomModel, saveDraft, activeDecalId, setActiveDecalId, uploadedImages, addUploadedImage, removeUploadedImage, 
     updateDecal, ditheringEnabled, setDitheringEnabled, 
     ditheringGridSize, setDitheringGridSize, ditheringPixelRatio, 
@@ -454,7 +454,7 @@ export default function App() {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 overflow-hidden">
-                        <img src={decal.url} alt="decal" className="w-6 h-6 object-contain border border-black/10 bg-white" onDoubleClick={(e) => { e.stopPropagation(); setEditingImage({ url: decal.url, id: decal.id, placement: decal.placement })}} draggable={false} />
+                        <img src={decal.url} alt="decal" className="w-6 h-6 object-contain border border-black/10 bg-white" onDoubleClick={(e) => { e.stopPropagation(); setEditingImage({ url: decal.url, id: decal.id })}} draggable={false} />
                         <span className="truncate text-[10px] font-bold">LAYER_{i + 1}</span>
                       </div>
                       <button onClick={(e) => { e.stopPropagation(); removeDecal(decal.id); }} className="opacity-50 hover:opacity-100 hover:text-red-600">
@@ -465,16 +465,16 @@ export default function App() {
                     {activeDecalId === decal.id && (
                       <div className="mt-1 pt-2 border-t border-black/10">
                         <div className="flex justify-between text-[9px] mb-1">
-                          <span>SCALE</span>
-                          <span>{(decal.scale[0] * 100).toFixed(0)}%</span>
+                          <span>SIZE</span>
+                          <span>{(decal.w * 100).toFixed(0)}%</span>
                         </div>
                         <input 
                           type="range" 
-                          min="1" max="200" 
-                          value={decal.scale[0] * 100} 
+                          min="10" max="200" 
+                          value={decal.w * 100} 
                           onChange={(e) => {
                             const s = parseInt(e.target.value) / 100;
-                            updateDecal(decal.id, { scale: [s, s, 1] });
+                            updateDecal(decal.id, { w: s, h: s });
                           }} 
                           className="w-full accent-black h-1" 
                         />
@@ -549,7 +549,7 @@ export default function App() {
                   // Previously this used .find(), which only ever surfaced a
                   // single decal per section and silently overwrote it on the
                   // next upload. Sections can now hold any number of images.
-                  const placementDecals = decals.filter(d => d.placement === placement);
+                  const placementDecals = decals.filter(d => d.panel === placement);
                   return (
                   <div key={placement} className="relative border border-dashed border-gray-400 min-h-24 flex flex-col hover:bg-gray-50 transition-colors group overflow-hidden p-1.5">
                     <button
@@ -565,7 +565,7 @@ export default function App() {
                             src={d.url}
                             alt={placement}
                             className="w-full h-full object-contain cursor-pointer"
-                            onClick={() => setEditingImage({ url: d.url, id: d.id, placement })}
+                            onClick={() => setEditingImage({ url: d.url, id: d.id })}
                             draggable={false}
                           />
                           <button
@@ -790,10 +790,10 @@ export default function App() {
             </div>
             <ImageEditor 
               src={editingImage.url} 
-              onSave={(url) => {
-                useStore.getState().addUploadedImage(url);
+              onSave={(dataUrl) => {
+                useStore.getState().addUploadedImage(dataUrl);
                 if (editingImage.id) {
-                  useStore.getState().updateDecal(editingImage.id, { url });
+                  useStore.getState().updateDecal(editingImage.id, { url: dataUrl });
                 }
                 setEditingImage(null);
               }} 

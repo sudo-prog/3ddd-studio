@@ -16,13 +16,13 @@ const MAX_ZOOM = 3;
 type Box = { x: number; y: number; w: number; h: number; rotation: number };
 
 // Simple front-only SceneBridge — no placement-based camera, no raycasting.
-const SceneBridge = () => {
+const SceneBridge = ({ onMeshReady }: { onMeshReady?: (m: THREE.Mesh[]) => void }) => {
   return (
     <>
       <ambientLight intensity={1.1} />
       <directionalLight position={[2, 3, 4]} intensity={1.2} />
       <directionalLight position={[-2, -1, -4]} intensity={0.4} />
-      <GarmentMeshes />
+      <GarmentMeshes onMeshReady={onMeshReady!} />
     </>
   );
 };

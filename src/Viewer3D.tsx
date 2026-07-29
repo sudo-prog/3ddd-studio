@@ -10,7 +10,6 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { useStore } from './store';
 import { ErrorBoundary } from './ErrorBoundary';
-import { useGesture } from '@use-gesture/react';
 import { Lock, Unlock } from 'lucide-react';
 import { GARMENT_PANELS, PanelDef } from './garmentPanels';
 import type { PanelId } from './store';
@@ -489,10 +488,14 @@ const GarmentPlaceholder = () => {
       const panelId = def.meshName.split('_').pop()?.toLowerCase() as PanelId || 'front';
       for (const mesh of meshes) {
         if (!mesh.material) continue;
-        const material = mesh.material.clone() as THREE.MeshStandardMaterial;
-        material.color.set('#ffffff');
-        material.map = getPanelTexture(activeId, panelId, def);
-        mesh.material = material;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const clonedMaterials = materials.map((m) => {
+          const cloned = m.clone() as THREE.MeshStandardMaterial;
+          cloned.color.set('#ffffff');
+          cloned.map = getPanelTexture(activeId, panelId, def);
+          return cloned;
+        });
+        mesh.material = clonedMaterials.length === 1 ? clonedMaterials[0] : clonedMaterials;
       }
     }
   }, [activeId, customModel, garment]);

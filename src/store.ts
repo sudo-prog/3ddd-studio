@@ -160,7 +160,7 @@ interface AppState {
 
   addDecal: (panel: PanelId, url: string, box: { x: number; y: number; w: number; h: number; rotation: number }) => void;
   removeDecal: (id: string) => void;
-  updateDecal: (id: string, updates: Partial<Pick<Decal, 'x'|'y'|'w'|'h'|'rotation'|'zIndex'>>) => void;
+  updateDecal: (id: string, updates: Partial<Pick<Decal, 'x'|'y'|'w'|'h'|'rotation'|'zIndex'|'url'>>) => void;
   setCustomModel: (model: { url: string, type: 'obj' | 'glb', fileId?: string } | null) => void;
   createCustomModelItem: (name: string, model: { url: string, type: 'obj' | 'glb', fileId?: string }) => void;
 
