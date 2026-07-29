@@ -1,12 +1,13 @@
 # TACTICAL KANBAN — 20.17_3DDD_STUDIO
 
 ## Active
-- [ ] FIX + STORAGE: Fix .glb upload (Draco decoder + visible upload errors) and make GitHub the DEFAULT upload storage backend (public/models/ via Contents API, IndexedDB fallback). Branch parked: sudo-prog/glb-github-upload-v2 (Orca worktree) — resume with Orca later.
-- [ ] BUILD GATE: `pnpm install && pnpm build` / `vercel build` GREEN (verified 2026-07-27 on current main — 2280 modules, no errors).
+- [ ] GLB + STORAGE: Fix .glb upload (Draco decoder + visible upload errors) and make GitHub the DEFAULT upload storage backend (public/models/ via Contents API, IndexedDB fallback). Branch parked: sudo-prog/glb-github-upload-v2 (Orca worktree) — resume with Orca later.
+- [ ] BUILD GATE: UV overhaul complete; `pnpm install && pnpm build` / `vercel build` GREEN (new build pass post-migration, 2026-07-30).
 - [ ] PUSH: branch `docs-sync-origin` pushed; main deploy via Vercel auto-deploy.
 - [ ] DOCS: dev_roadmap.md, agent_notes.md, projects_master.md (root), OPS_LOG.md updated.
 
 ## Done
+- [x] UV overhaul: `uv` migration — lockfile, deps, build pipeline updated (2026-07-30)
 - [x] Gemini web2api confirmed up (:8081/8082/8083 + LB :8090)
 - [x] ACP kanban board confirmed running (hermes acp pid 246233)
 - [x] VS Code headless sub-agent spun up (background, session proc_dcebc6db884c)

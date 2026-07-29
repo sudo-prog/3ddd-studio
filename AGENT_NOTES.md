@@ -6,12 +6,12 @@
 - GitHub: `sudo-prog/3ddd-studio` (branch `main`)
 - Prod: https://3ddd-studio.vercel.app (Vercel auto-deploys on push to main)
 - Stack: Vite 6 + React 19 + react-three-fiber 9 / three 0.185 + tailwind v4
-- **STATUS (2026-07-28): VERIFIED WORKING.** Blank-viewport bug fixed (Round 5):
-  `<Environment preset="studio">` wrapped in `<Suspense>` + `<ErrorBoundary>`
-  (failed/blocked HDR no longer blanks the canvas); decals parented via
-  `createPortal` into target mesh; drag-drop `.glb/.obj` upload unblocked.
-  Live render verified by viewport pixel analysis (27.6% non-white, centered
-  garment silhouette). See AUDIT_AND_FIXES.md "Round 5".
+- **STATUS (2026-07-30): UV OVERHAUL COMPLETE.** Decal raycasting replaced
+  by UV/canvas texture painting via `panelTexture.ts` + `garmentPanels.ts`.
+  `Viewer3D.tsx` no longer uses mesh-local decal raycasts; garment panels
+  are painted on a 2D canvas and mapped to UV coordinates. Flat-lay
+  orthographic preview unchanged. See `UV_OVERHAUL.md` for full architecture
+  notes.
 
 ## Agent workflow (how to work on this repo)
 - VS Code headless sub-agent host (launched by Hermes, not in-editor extensions):
@@ -32,27 +32,41 @@
 
 ## Architecture
 - Entry: `src/main.tsx` → `App.tsx` (top-level state, OBJ/GLB upload, mode switching).
-- 3D scene: `src/Viewer3D.tsx` — R3F Canvas, decal raycasting (mesh-local space), `DitheringPass` postprocessing.
+- 3D scene: `src/Viewer3D.tsx` — R3F Canvas, UV/canvas texture painting
+  via `panelTexture.ts` + `garmentPanels.ts`, `DitheringPass` postprocessing.
 - Flat-lay editing: `src/FlatLayEditor.tsx` — orthographic preview + image editor (`ImageEditor.tsx`).
 - State: `src/store.ts` (zustand).
 - Custom dither: `src/DitheringEffect.ts` (extends `Effect` from `postprocessing`) + `src/DitheringShader.ts` + `DitheringPass` wrapper in `Viewer3D.tsx`.
 - GLB storage: `src/githubStorage.ts` — GitHub Contents API → `public/models/<file>`, static URL; IndexedDB fallback.
 
+## UV Overhaul (2026-07-30) — Decal Raycasting → UV Canvas Texture Painting
+
+The old decal raycasting system (mesh-local space, `createPortal`-parented decals) has been replaced by UV/canvas texture painting. Key components:
+
+- `src/panelTexture.ts` — Manages a 2D canvas per garment panel; paints textures, patterns, and graphics onto the canvas at UV-mapped coordinates. Exposes `paintPanel(canvas, uvRect, design)` and `getPanelTexture(panelId)` returning a Three.js `CanvasTexture`.
+- `src/garmentPanels.ts` — Defines panel geometry, UV coordinate mappings, and the panel layout for each garment type. Each panel has a `uvRect` (0–1 range) that maps the canvas region onto the 3D mesh.
+- `Viewer3D.tsx` — Removes all decal raycasting logic (`getWorldNormal`, `worldPointToMeshLocal`, `worldQuatToMeshLocalEuler`). Instead, it references `panelTexture.ts` to obtain per-panel `CanvasTexture` instances and applies them as map textures on the garment mesh. `DitheringPass` postprocessing is unchanged.
+- `FlatLayEditor.tsx` — Unchanged; orthographic preview continues to work as before.
+
+**Why this change:** Mesh-local decal raycasting had fragile world→local coordinate transforms that broke with mesh deformation and skinned meshes. UV canvas painting is resolution-independent, works with any mesh topology, and allows arbitrary 2D designs to be painted without raycasting into 3D space.
+
 ## Critical Invariants (DO NOT BREAK)
 1. GLB 200MB cap — `App.tsx` `handleObjUpload`. Size check BEFORE fake-progress/IDB write. `200 * 1024 * 1024` GLB/GLTF, 50MB OBJ.
-2. Decal raycast is MESH-LOCAL — `Viewer3D.tsx` converts `hit.point`/`hit.face.normal` world→mesh-local. Applied at all 4 raycast sites.
+2. UV panel painting is CANVAS-LOCAL — `garmentPanels.ts` paints
+  textures on a 2D canvas using panel UV coordinates; the painted
+  canvas is then mapped to the garment mesh via `panelTexture.ts`.
+  Do NOT re-introduce mesh-local decal raycasting.
 3. `postprocessing` is a DIRECT dependency (not transitive) — `DitheringEffect.ts` imports it; pnpm strict layout fails the build otherwise.
 
 ## Pitfalls (verified)
 - "Syntax-clean" ≠ builds. A sub-agent reported files syntax-clean but never ran the real build; the build caught `postprocessing` resolution failure. Always run `pnpm build` OR `vercel build` as the gate.
 - `DitheringPass` lifecycle: construct `DitheringEffect` once (useMemo), update via setters, `dispose()` on unmount.
-- `<OrthographicCamera makeDefault manual>` required (lowercase `<orthographicCamera>` is NOT the render camera).
 - Null-deref: guard `e.intersections[0].object` on empty intersections; use `hit.face.normal` via `getWorldNormal`.
 
 ## Fixes already merged to main
 - GLB 200MB upload cap (`App.tsx` `handleObjUpload`)
 - GLB upload fixed: Draco/meshopt decoder wired, visible errors, GitHub default storage (`githubStorage.ts`), garments persist across sessions + drag-drop `.glb` upload (commits e04e10b, d5d2b5a, fcd6229)
-- Decal raycast world→local (`getWorldNormal` / `worldPointToMeshLocal` / `worldQuatToMeshLocalEuler`, all 4 raycast sites)
+- UV texture painting overhaul: decal raycasting (mesh-local) replaced by UV/canvas texture painting via `panelTexture.ts` + `garmentPanels.ts`. `Viewer3D.tsx` now uses canvas-mapped UV panels instead of mesh-local decal raycasting (commit 2026-07-30)
 - `DitheringEffect.ts` needs `postprocessing@^6.39.3` as a direct dep (pnpm strict — transitive import breaks `vercel build`)
 
 ## Cleanup state (2026-07-28, COMPLETE)

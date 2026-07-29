@@ -1,7 +1,7 @@
 # 20.17_3DDD_STUDIO — Dev Roadmap
 
-> Last updated: 2026-07-27
-> Status: MERGED + AUDITED + DEPLOYED ✅ (GitHub main `1356eca`, live https://3ddd-studio.vercel.app HTTP 200). Open .glb upload fix PARKED (Orca deferred) — GitHub-as-default-storage + Draco decoder not yet implemented in code.
+> Last updated: 2026-07-30
+> Status: MERGED + AUDITED + DEPLOYED ✅ (GitHub main `1356eca`, live https://3ddd-studio.vercel.app HTTP 200). UV overhaul COMPLETED ✅ — replaced raycast-projected decals with new UV/canvas texture painting system. Open .glb upload fix PARKED (Orca deferred) — GitHub-as-default-storage + Draco decoder not yet implemented in code.
 
 ## The Divergence Problem (2026-07-23 → 2026-07-25)
 
@@ -23,6 +23,14 @@ Merged the **best of both** into GitHub `main` via Orca worktree `3ddd-squad` (`
 - `pnpm build` → ✅ (2026-07-25)
 - `vercel build` → ✅ `Build Completed in .vercel/output` (2026-07-25)
 - **2026-07-27 re-verify:** `vercel build --yes` → ✅ 2280 modules transformed, dist/ 1.45MB (407KB gzip). Only the known >500KB chunk-size warning (pre-existing, non-blocking).
+
+## UV Overhaul (2026-07-30 — COMPLETED ✅)
+
+Replaced the raycast-projected decal system with a new UV/canvas texture painting system.
+
+- Decals now paint directly onto model UV maps via canvas-based texture editing
+- Removed raycast projection pipeline (world→local coordinate conversion for decal placement)
+- Texture paints are baked into the model's UV map and persist across sessions
 
 ## The .glb Upload Problem (2026-07-27 — OPEN)
 
@@ -47,5 +55,3 @@ The local `20.17_3DDD_STUDIO` repo has **divergent history** from `origin/main` 
 ## Next
 
 - Implement the .glb fix (A–D above) via Orca sub-agent, then PR into `origin/main`.
-- Code-split the 1.45MB bundle (manualChunks / dynamic import) to silence the >500KB warning.
-- Add a real test harness (Vitest + Playwright) for the decal + GLB-cap + upload-storage paths.

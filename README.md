@@ -1,6 +1,6 @@
 # 3DDD.STUDIO
 
-A PWA for applying decal images to a 3D garment.
+A PWA for UV texture painting on 3D garments — canvas-based texture baking with real-time UV mapping preview.
 
 ## Run locally
 
