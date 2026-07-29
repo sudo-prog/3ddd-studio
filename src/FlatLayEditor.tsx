@@ -1,14 +1,31 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import * as THREE from 'three';
-import { X, Upload } from 'lucide-react';
+import { X, Upload, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
 import { useStore } from './store';
 import { GarmentMeshes } from './Viewer3D';
 import { ImageEditor } from './ImageEditor';
 import { repaintPanel } from './panelTexture';
 
+type Placement = 'front' | 'back' | 'left_arm' | 'right_arm';
+
+const BASE_HALF_SIZE = 2.2;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 3;
+
+type Box = { x: number; y: number; w: number; h: number; rotation: number };
+
+// Simple front-only SceneBridge — no placement-based camera, no raycasting.
+const SceneBridge = () => {
+  return (
+    <>
+      <ambientLight intensity={1.1} />
+      <directionalLight position={[2, 3, 4]} intensity={1.2} />
+      <directionalLight position={[-2, -1, -4]} intensity={0.4} />
+      <GarmentMeshes />
+    </>
+  );
+};
 
 const angleBetween = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI);
@@ -21,6 +38,8 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
   const [rawImageForEdit, setRawImageForEdit] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [box, setBox] = useState<Box>({ x: 0.35, y: 0.35, w: 0.3, h: 0.3, rotation: 0 });
+  const [isDraggingOverDrop, setIsDraggingOverDrop] = useState(false);
+  const [previewZoom, setPreviewZoom] = useState(1);
 
   // Tracks every active pointer on the box (by pointerId) so we can tell a
   // one-finger drag (move) apart from a two-finger touch (pinch to
@@ -35,7 +54,27 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
     startPointer: { x: number; y: number };
   }>({ mode: null, startBox: box, startDist: 0, startAngle: 0, startCenter: { x: 0, y: 0 }, startPointer: { x: 0, y: 0 } });
 
-  const handleMeshesReady = useCallback((m: THREE.Mesh[]) => { }, []);
+  // rAF-throttled live preview: repaints the garment panel texture
+  // whenever the user moves/transforms the decal box while an image
+  // is loaded and the garment is locked.
+  const rafRef = useRef<number | null>(null);
+  const previewDirty = useRef(false);
+  const handleRepaint = useCallback(() => {
+    rafRef.current = null;
+    previewDirty.current = false;
+    const libraryItemId = useStore.getState().activeId;
+    if (!libraryItemId || !pendingImage) return;
+    const def = useStore.getState().library.find(i => i.id === libraryItemId);
+    const baseColor = def?.color ?? '#ffffff';
+    const decals = useStore.getState().decals;
+    repaintPanel(libraryItemId, placement, baseColor, decals).catch(() => {});
+  }, [placement, pendingImage]);
+
+  const scheduleRepaint = useCallback(() => {
+    if (previewDirty.current) return;
+    previewDirty.current = true;
+    rafRef.current = requestAnimationFrame(handleRepaint);
+  }, [handleRepaint]);
 
   const loadFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -127,6 +166,10 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
         rotation: g.startBox.rotation + deltaAngle,
       });
     }
+
+    if (pendingImage) {
+      scheduleRepaint();
+    }
   };
 
   const onGlobalPointerUp = (e: PointerEvent) => {
@@ -142,6 +185,7 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
       window.removeEventListener('pointermove', onGlobalPointerMove);
       window.removeEventListener('pointerup', onGlobalPointerUp);
       window.removeEventListener('pointercancel', onGlobalPointerUp);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box]);
@@ -198,7 +242,7 @@ export const FlatLayEditor = ({ placement, onClose }: { placement: Placement; on
           onDrop={handleDrop}
         >
           <Canvas orthographic dpr={[1, 2]} gl={{ preserveDrawingBuffer: true }}>
-            <SceneBridge onMeshesReady={handleMeshesReady} />
+            <SceneBridge />
           </Canvas>
 
           {pendingImage ? (
